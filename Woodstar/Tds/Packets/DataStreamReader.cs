@@ -1,124 +1,245 @@
 using System;
 using System.Buffers;
+using System.Buffers.Binary;
 using System.Diagnostics;
-using System.IO.Pipelines;
+using System.Diagnostics.CodeAnalysis;
 using System.Runtime.CompilerServices;
-using System.Threading;
-using System.Threading.Tasks;
+using System.Text;
+using Woodstar.Buffers;
 
 namespace Woodstar.Tds.Packets;
 
-class DataStreamSegment : ReadOnlySequenceSegment<byte>
+ref struct DataStreamReader
 {
-    public PacketHeader PacketHeader { get; set; }
-    public void SetMemory(ReadOnlyMemory<byte> memory) => Memory = memory;
-    public int Length => Memory.Length;
+    SequenceReader<byte> _reader;
+    int _packetRemaining;
+    public DataStreamReader(ReadOnlySequence<byte> sequence) => _reader = new SequenceReader<byte>(sequence);
 
-    public new DataStreamSegment? Next
+    public long Consumed { get; set; }
+
+    public void Advance(int count)
     {
-        get
-        {
-            if (base.Next is { } next)
-                return Unsafe.As<ReadOnlySequenceSegment<byte>, DataStreamSegment>(ref next);
+        var totalAdvanced = 0;
 
-            return null;
+        var packetRemaining = _packetRemaining;
+        var unreadSequence = _reader.UnreadSequence;
+
+        while (true)
+        {
+            var advanced = Math.Min(count, packetRemaining);
+            if (advanced > unreadSequence.Length)
+                throw new ArgumentOutOfRangeException();
+
+            unreadSequence = unreadSequence.Slice(advanced);
+            packetRemaining -= advanced;
+            totalAdvanced += advanced;
+            if (count == 0)
+                break;
+
+            // Consumed the current packet, parse the next packet's header etc.
+            Debug.Assert(packetRemaining == 0);
+            if (!PacketHeader.TryParse(unreadSequence, out var header))
+                throw new ArgumentOutOfRangeException();
+            unreadSequence = unreadSequence.Slice(PacketHeader.ByteCount);
+            packetRemaining = header.PacketSize - PacketHeader.ByteCount;
         }
-        set => base.Next = value;
+
+        _reader.Advance(totalAdvanced);
+        _packetRemaining = packetRemaining;
     }
 
-    public void SetNext(DataStreamSegment segment)
+    public bool HasAtLeast(int length)
+        => length <= _packetRemaining && length <= _reader.Remaining || HasAtLeastSlow(length);
+
+    bool HasAtLeastSlow(int length)
     {
-        Debug.Assert(segment != null);
-        Debug.Assert(Next == null);
+        var packetRemaining = _packetRemaining;
+        var totalRemainingLength = _packetRemaining;
+        var unreadSequence = _reader.UnreadSequence;
 
-        Next = segment;
-
-        segment = this;
-
-        while (segment.Next != null)
+        while (length > totalRemainingLength)
         {
-            Debug.Assert(segment.Next != null);
-            segment.Next.RunningIndex = segment.RunningIndex + segment.Length;
-            segment = segment.Next;
+            if (packetRemaining > unreadSequence.Length)
+            {
+                return false;
+            }
+
+            var headerStart = unreadSequence.Slice(packetRemaining);
+            if (!PacketHeader.TryParse(headerStart, out var header))
+                return false;
+            packetRemaining = header.PacketSize - PacketHeader.ByteCount;
+            totalRemainingLength += packetRemaining;
+            unreadSequence = headerStart.Slice(PacketHeader.ByteCount);
         }
-    }
-}
 
-public class DataStreamReader : PipeReader
-{
-    int _packetConsumed;
-    readonly PipeReader _pipeReader;
-
-    public DataStreamReader(PipeReader pipeReader)
-    {
-        // TODO validate minimumSegmentSize is > PacketHeader.ByteCount.
-        _pipeReader = pipeReader;
+        return true;
     }
 
-    public override bool TryRead(out ReadResult result)
+    bool EnsurePacketData(scoped Span<byte> scratchBuffer, out bool useScratchBuffer)
     {
-        if (_pipeReader.TryRead(out result))
+        if (_packetRemaining >= scratchBuffer.Length)
         {
-            result = TransformReadResult(result);
+            useScratchBuffer = false;
             return true;
+        }
+
+        return EnsureSlow(scratchBuffer, out useScratchBuffer);
+    }
+
+    bool EnsureSlow(scoped Span<byte> scratchBuffer, out bool useScratchBuffer)
+    {
+        if (_reader.Remaining < PacketHeader.ByteCount + scratchBuffer.Length)
+        {
+            useScratchBuffer = default;
+            return false;
+        }
+
+        var unreadSequence = _reader.UnreadSequence;
+        var headerStart = unreadSequence.Slice(_packetRemaining);
+        PacketHeader.TryParse(headerStart, out var header);
+
+        if (_packetRemaining > 0)
+        {
+            unreadSequence.Slice(0, _packetRemaining).TryCopyTo(scratchBuffer);
+            headerStart.Slice(PacketHeader.ByteCount, scratchBuffer.Length - _packetRemaining)
+                .TryCopyTo(scratchBuffer.Slice(_packetRemaining));
+
+            useScratchBuffer = true;
+        }
+        else
+        {
+            useScratchBuffer = false;
+        }
+
+        _reader.Advance(PacketHeader.ByteCount + _packetRemaining);
+        _packetRemaining = header.PacketSize;
+
+        return true;
+    }
+
+    public bool TryRead(out byte value)
+    {
+        Span<byte> scratchBuffer = stackalloc byte[1];
+
+        if (!EnsurePacketData(scratchBuffer, out var useScratchBuffer))
+        {
+            value = default;
+            return false;
+        }
+
+        Debug.Assert(!useScratchBuffer);
+
+        return _reader.TryRead(out value);
+    }
+
+    public bool TryReadLittleEndian(out ushort value)
+    {
+        Span<byte> scratchBuffer = stackalloc byte[sizeof(ushort)];
+
+        if (!EnsurePacketData(scratchBuffer, out var useScratchBuffer))
+        {
+            value = default;
+            return false;
+        }
+
+        return useScratchBuffer
+            ? BinaryPrimitives.TryReadUInt16LittleEndian(scratchBuffer, out value)
+            : _reader.TryReadLittleEndian(out value);
+    }
+
+    public bool TryReadLittleEndian(out int value)
+    {
+        Span<byte> scratchBuffer = stackalloc byte[sizeof(int)];
+
+        if (!EnsurePacketData(scratchBuffer, out var useScratchBuffer))
+        {
+            value = default;
+            return false;
+        }
+
+        return useScratchBuffer
+            ? BinaryPrimitives.TryReadInt32LittleEndian(scratchBuffer, out value)
+            : _reader.TryReadLittleEndian(out value);
+    }
+
+    public bool TryReadLittleEndian(out uint value)
+    {
+        Unsafe.SkipInit(out value);
+        return TryReadLittleEndian(out Unsafe.As<uint, int>(ref value));
+    }
+
+    public bool TryReadLittleEndian(out long value)
+    {
+        Span<byte> scratchBuffer = stackalloc byte[sizeof(long)];
+
+        if (!EnsurePacketData(scratchBuffer, out var useScratchBuffer))
+        {
+            value = default;
+            return false;
+        }
+
+        return useScratchBuffer
+            ? BinaryPrimitives.TryReadInt64LittleEndian(scratchBuffer, out value)
+            : _reader.TryReadLittleEndian(out value);
+    }
+
+    public bool TryReadLittleEndian(out ulong value)
+    {
+        Unsafe.SkipInit(out value);
+        return TryReadLittleEndian(out Unsafe.As<ulong, long>(ref value));
+    }
+
+    public bool TryReadBVarchar([NotNullWhen(true)] out string value)
+    {
+        value = "";
+        if (TryRead(out var len))
+        {
+            if (HasAtLeast(len) && len <= _packetRemaining)
+            {
+                if (len > 0)
+                {
+                    var sequence = _reader.UnreadSequence.Slice(0, 2 * len);
+                    value = Encoding.Unicode.GetString(sequence);
+                    _reader.Advance(2 * len);
+                }
+                return true;
+            }
+
+            throw new NotImplementedException();
         }
 
         return false;
     }
 
-    public override async ValueTask<ReadResult> ReadAsync(CancellationToken cancellationToken = default)
-        => TransformReadResult(await ReadAsync(cancellationToken));
-
-    ReadResult TransformReadResult(ReadResult readResult)
+    public bool TryReadUsVarchar([NotNullWhen(true)] out string value)
     {
-        var roSeq = readResult.Buffer;
-        DataStreamSegment? segmentHead = null;
-        DataStreamSegment? segmentTail = null;
-        var position = default(SequencePosition);
-        var consumedSegmentBytes = _packetConsumed;
-        var packetStart = _packetConsumed;
-        while (roSeq.TryGet(ref position, out var segment))
+        value = "";
+        if (TryReadLittleEndian(out ushort len))
         {
-            var segSpan = segment.Span.Slice(packetStart);
-            while (consumedSegmentBytes <= segment.Length)
+            if (HasAtLeast(len) && len <= _packetRemaining)
             {
-                if (PacketHeader.TryParse(segSpan, out var header))
+                if (len > 0)
                 {
-                    packetStart += header.PacketSize;
-                    consumedSegmentBytes += header.PacketSize;
-                    var adjustedSegment = GetSegment(segment.Slice(8), header);
-                    segmentHead ??= adjustedSegment;
-                    if (segmentTail is not null)
-                        segmentTail.SetNext(adjustedSegment);
-                    segmentTail = adjustedSegment;
+                    var sequence = _reader.UnreadSequence.Slice(0, 2 * len);
+                    value = Encoding.Unicode.GetString(sequence);
+                    _reader.Advance(2 * len);
                 }
+                return true;
             }
 
-            packetStart -= segment.Length;
-            consumedSegmentBytes = 0;
+            throw new NotImplementedException();
         }
 
-        Debug.Assert(segmentHead is not null);
-        return new ReadResult(
-            new(segmentHead, 0, segmentTail ?? segmentHead, (segmentTail ?? segmentHead).Length),
-            readResult.IsCompleted,
-            readResult.IsCanceled
-        );
-
-        DataStreamSegment GetSegment(ReadOnlyMemory<byte> memory, PacketHeader header)
-        {
-            var segment = new DataStreamSegment();
-            segment.SetMemory(memory);
-            segment.PacketHeader = header;
-            return segment;
-        }
+        return false;
     }
 
-    public override void AdvanceTo(SequencePosition consumed, SequencePosition examined)
+    public bool TryCopyTo(scoped Span<byte> destination)
     {
+        if (_packetRemaining >= destination.Length)
+        {
+            return _reader.TryCopyTo(destination);
+        }
+
         throw new NotImplementedException();
     }
-    public override void AdvanceTo(SequencePosition consumed) => AdvanceTo(consumed, consumed);
-    public override void CancelPendingRead() => _pipeReader.CancelPendingRead();
-    public override void Complete(Exception? exception = null) => Complete(exception);
 }
