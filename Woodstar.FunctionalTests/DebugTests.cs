@@ -74,18 +74,17 @@ public class DebugTests
 
         var pipeReader = new SimplePipeReader(stream.Reader, Timeout.InfiniteTimeSpan);
         await pipeReader.ReadAtLeastAsync(43 + 8);
-        pipeReader.Advance(43 + 8);
+        pipeReader.Advance(43);
         var tokenReader = new TokenReader(pipeReader);
         await tokenReader.MoveNextAsync();
         await tokenReader.MoveNextAsync();
         await tokenReader.MoveNextAsync();
         await tokenReader.MoveNextAsync();
         await tokenReader.MoveNextAsync();
-        await pipeReader.ReadAtLeastAsync(8);
-        pipeReader.Advance(8);
+
         await tokenReader.MoveNextAsync();
         await tokenReader.MoveNextAsync();
-        await tokenReader.MoveNextAsync(); // crash
+        await tokenReader.MoveNextAsync();
         await tokenReader.MoveNextAsync();
     }
 }
