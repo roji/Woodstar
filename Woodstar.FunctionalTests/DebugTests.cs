@@ -63,7 +63,7 @@ public class DebugTests
         writer.Commit();
         dataStreamWriter.EndMessage();
 
-        var sqlBatch = new SqlBatchMessage(new AllHeaders(null, new TransactionDescriptorHeader(0, 1), null), "Select 1;");
+        var sqlBatch = new SqlBatchMessage(new AllHeaders(null, new TransactionDescriptorHeader(0, 1), null), "SELECT bla FROM data");
         output = dataStreamWriter.StartMessage(sqlBatch.Header.Type, sqlBatch.Header.Status);
         writer = new StreamingWriter<IStreamingWriter<byte>>(output);
         sqlBatch.Write(writer);

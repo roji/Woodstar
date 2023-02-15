@@ -17,21 +17,40 @@ namespace Woodstar.Tds.Tokens;
 class TokenReader
 {
     readonly SimplePipeReader _pipeReader;
+    private readonly ResultSetReader _resultSetReader;
+    private bool _rowReaderRented;
 
     public TokenReader(SimplePipeReader pipeReader)
     {
         _pipeReader = pipeReader;
+        _resultSetReader = new(pipeReader);
     }
 
     public Token Current { get; private set; }
 
+    public ResultSetReader GetRowReader(List<ColumnData> columnData)
+    {
+        Debug.Assert(Current is RowToken);
+        Debug.Assert(!_rowReaderRented);
+        _resultSetReader.Initialize(columnData);
+
+        return _resultSetReader;
+    }
+
     public async ValueTask MoveNextAsync()
     {
+        if (_rowReaderRented)
+        {
+            _resultSetReader.Reset();
+            _rowReaderRented = false;
+        }
+
         ReadOnlySequence<byte> result;
         long consumed;
         Token? token;
         TokenType? tokenType = default;
         ReadStatus status;
+
         do
         {
             result = await _pipeReader.ReadAtLeastAsync(1);
@@ -168,9 +187,132 @@ class TokenReader
 
                         if (!reader.TryRead(out var typeByte))
                             return ReadStatus.NeedMoreData;
-                        var type = (DataType)typeByte;
-                        if (BackendMessage.DebugEnabled && !Enum.IsDefined(type))
+                        var typeCode = (DataTypeCode)typeByte;
+                        if (BackendMessage.DebugEnabled && !Enum.IsDefined(typeCode))
                             throw new ArgumentOutOfRangeException();
+
+                        DataType type;
+                        switch (typeCode)
+                        {
+                            // Fixed-Length
+                            case DataTypeCode.INT1TYPE:
+                                type = new DataType(typeCode, nullable: false, DataTypeLengthKind.Fixed, length: 1);
+                                break;
+                            case DataTypeCode.BITTYPE:
+                                type = new DataType(typeCode, nullable: false, DataTypeLengthKind.Fixed, length: 1);
+                                break;
+                            case DataTypeCode.INT2TYPE:
+                                type = new DataType(typeCode, nullable: false, DataTypeLengthKind.Fixed, length: 2);
+                                break;
+                            case DataTypeCode.INT4TYPE:
+                                type = new DataType(typeCode, nullable: false, DataTypeLengthKind.Fixed, length: 4);
+                                break;
+                            case DataTypeCode.FLT8TYPE:
+                                type = new DataType(typeCode, nullable: false, DataTypeLengthKind.Fixed, length: 8);
+                                break;
+                            case DataTypeCode.INT8TYPE:
+                                type = new DataType(typeCode, nullable: false, DataTypeLengthKind.Fixed, length: 8);
+                                break;
+
+                            // Variable-Length
+                            // ByteLen
+                            case DataTypeCode.GUIDTYPE:
+                            {
+                                if (!reader.TryRead(out var length))
+                                    return ReadStatus.NeedMoreData;
+
+                                type = new DataType(typeCode, nullable: length == 0, DataTypeLengthKind.VariableByte, length);
+                                break;
+                            }
+                            case DataTypeCode.INTNTYPE:
+                            {
+                                if (!reader.TryRead(out var length))
+                                    return ReadStatus.NeedMoreData;
+
+                                type = new DataType(typeCode, nullable: length == 0, DataTypeLengthKind.VariableByte, length);
+                                break;
+                            }
+                            case DataTypeCode.BITNTYPE:
+                            {
+                                if (!reader.TryRead(out var length))
+                                    return ReadStatus.NeedMoreData;
+
+                                type = new DataType(typeCode, nullable: length == 0, DataTypeLengthKind.VariableByte, length);
+                                break;
+                            }
+                            case DataTypeCode.DECIMALNTYPE:
+                            {
+                                if (!reader.TryRead(out var length))
+                                    return ReadStatus.NeedMoreData;
+                                if (!reader.TryRead(out var precision))
+                                    return ReadStatus.NeedMoreData;
+                                if (!reader.TryRead(out var scale))
+                                    return ReadStatus.NeedMoreData;
+
+                                type = new DataType(typeCode, nullable: length == 0, DataTypeLengthKind.VariableByte, length, precision, scale);
+                                break;
+                            }
+                            case DataTypeCode.NUMERICNTYPE:
+                            case DataTypeCode.FLTNTYPE:
+                            case DataTypeCode.MONEYNTYPE:
+                            case DataTypeCode.DATETIMNTYPE:
+                            case DataTypeCode.DATENTYPE:
+                            case DataTypeCode.TIMENTYPE:
+                            case DataTypeCode.DATETIME2NTYPE:
+                            case DataTypeCode.DATETIMEOFFSETNTYPE:
+
+                            // UShortLen
+                            case DataTypeCode.BIGVARBINARYTYPE:
+                            case DataTypeCode.BIGVARCHARTYPE:
+                            case DataTypeCode.BIGBINARYTYPE:
+                            case DataTypeCode.BIGCHARTYPE:
+                                throw new NotSupportedException();
+
+                            case DataTypeCode.NVARCHARTYPE:
+                            {
+                                if (!reader.TryReadLittleEndian(out ushort length))
+                                    return ReadStatus.NeedMoreData;
+                                if (!reader.TryReadLittleEndian(out ushort collationCodePage))
+                                    return ReadStatus.NeedMoreData;
+                                if (!reader.TryReadLittleEndian(out ushort collationFlagsRaw))
+                                    return ReadStatus.NeedMoreData;
+                                var collationFlags = (CollationFlags)collationFlagsRaw;
+                                if (BackendMessage.DebugEnabled && !Enum.IsDefined(collationFlags))
+                                    throw new ArgumentOutOfRangeException();
+                                if (!reader.TryRead(out var collationCharsetId))
+                                    return ReadStatus.NeedMoreData;
+                                type = new DataType(typeCode, nullable: length == 0, DataTypeLengthKind.VariableUShort, length);
+                                break;
+                            }
+                            case DataTypeCode.NCHARTYPE:
+
+                            // LongLen
+                            case DataTypeCode.TEXTTYPE:
+                            case DataTypeCode.IMAGETYPE:
+                            case DataTypeCode.NTEXTTYPE:
+                            case DataTypeCode.SSVARIANTTYPE:
+                            case DataTypeCode.XMLTYPE:
+
+                            // PartLen
+                            // Also Includes XML/VarChar/VarBinary/NVarChar
+                            case DataTypeCode.UDTTYPE:
+                            default:
+                                throw new ArgumentOutOfRangeException();
+
+                            case DataTypeCode.FLT4TYPE:
+                            case DataTypeCode.DATETIM4TYPE:
+                            case DataTypeCode.MONEYTYPE:
+                            case DataTypeCode.DATETIMETYPE:
+                            case DataTypeCode.MONEY4TYPE:
+                            case DataTypeCode.DECIMALTYPE:
+                            case DataTypeCode.NUMERICTYPE:
+                            case DataTypeCode.CHARTYPE:
+                            case DataTypeCode.VARCHARTYPE:
+                            case DataTypeCode.BINARYTYPE:
+                            case DataTypeCode.VARBINARYTYPE:
+                                throw new NotSupportedException();
+                        }
+
 
                         if (!reader.TryReadBVarchar(out var columnName))
                             return ReadStatus.NeedMoreData;
@@ -236,60 +378,4 @@ class TokenReader
         DONEINPROC = 0xFF,
         // OFFSET - removed in 7.2
     }
-}
-
-enum DataType : byte
-{
-    // Fixed-Length
-    INT1TYPE = 0x30,            // TinyInt
-    BITTYPE = 0x32,             // Bit
-    INT2TYPE = 0x34,            // SmallInt
-    INT4TYPE = 0x38,            // Int
-    DATETIM4TYPE = 0x3A,        // SmallDateTime
-    FLT4TYPE = 0x3B,            // Real
-    MONEYTYPE = 0x3C,           // Money
-    DATETIMETYPE = 0x3D,        // DateTime
-    FLT8TYPE = 0x3E,            // Float
-    MONEY4TYPE = 0x7A,          // SmallMoney
-    INT8TYPE = 0x7F,            // BigInt
-    DECIMALTYPE = 0x37,         // Decimal
-    NUMERICTYPE = 0x3F,         // Numeric
-
-    // Variable-Length
-    // ByteLen
-    GUIDTYPE = 0x24,            // UniqueIdentifier
-    INTNTYPE = 0x26,            // Integer
-    BITNTYPE = 0x68,            // Bit
-    DECIMALNTYPE = 0x6A,        // Decimal
-    NUMERICNTYPE = 0x6C,        // Numeric
-    FLTNTYPE = 0x6D,            // Float
-    MONEYNTYPE = 0x6E,          // Money
-    DATETIMNTYPE = 0x6F,        // DateTime
-    DATENTYPE = 0x28,           // Date
-    TIMENTYPE = 0x29,           // Time
-    DATETIME2NTYPE = 0x2A,      // DataTime2
-    DATETIMEOFFSETNTYPE = 0x2B, // DateTimeOffset
-    CHARTYPE = 0x2F,            // Char
-    VARCHARTYPE = 0x27,         // VarChar
-    BINARYTYPE = 0x2D,          // Binary
-    VARBINARYTYPE = 0x25,       // VarBinary
-
-    // UShortLen
-    BIGVARBINARYTYPE = 0xA5,    // VarBinary
-    BIGVARCHARTYPE = 0xA7,      // VarChar
-    BIGBINARYTYPE = 0xAD,       // Binary
-    BIGCHARTYPE = 0xAF,         // Char
-    NVARCHARTYPE = 0xE7,        // NVarChar
-    NCHARTYPE = 0xEF,           // NChar
-
-    // LongLen
-    TEXTTYPE = 0x23,            // Text
-    IMAGETYPE = 0x22,           // Image
-    NTEXTTYPE = 0x63,           // NText
-    SSVARIANTTYPE = 0x62,       // sql_variant
-    XMLTYPE = 0xF1,             // XML
-
-    // PartLen
-    // Also Includes XML/VarChar/VarBinary/NVarChar
-    UDTTYPE = 0xF0,             // CLR UDT
 }
