@@ -45,46 +45,57 @@ public class DebugTests
     [Fact]
     public async Task PreloginTest()
     {
-        var stream = await _databaseService.OpenConnectionAsync();
+        var connection = await _databaseService.OpenConnectionAsync();
 
-        var dataStreamWriter = new DataStreamWriter(new PipeStreamingWriter(stream.Writer), 4088);
+        var dataStreamWriter = new DataStreamWriter(new PipeStreamingWriter(connection.Writer), 4088);
         var message = new PreloginMessage();
         var output = dataStreamWriter.StartMessage(message.Header.Type, message.Header.Status);
         var writer = new StreamingWriter<IStreamingWriter<byte>>(output);
         message.Write(writer);
-        writer.Commit();
-        dataStreamWriter.EndMessage();
-        // await dataStreamWriter.FlushAsync();
+        dataStreamWriter.Advance(writer.BufferedBytes, endMessage: true);
+        // writer.Commit();
+        // dataStreamWriter.EndMessage();
 
         var loginMessage = new Login7Message(DatabaseService.Username, DatabaseService.Password, DatabaseService.Database, new byte[6]);
         output = dataStreamWriter.StartMessage(loginMessage.Header.Type, loginMessage.Header.Status);
         writer = new StreamingWriter<IStreamingWriter<byte>>(output);
         loginMessage.Write(writer);
-        writer.Commit();
-        dataStreamWriter.EndMessage();
+        dataStreamWriter.Advance(writer.BufferedBytes, endMessage: true);
+        // writer.Commit();
+        // dataStreamWriter.EndMessage();
 
         var sqlBatch = new SqlBatchMessage(new AllHeaders(null, new TransactionDescriptorHeader(0, 1), null), "SELECT bla FROM data");
         output = dataStreamWriter.StartMessage(sqlBatch.Header.Type, sqlBatch.Header.Status);
         writer = new StreamingWriter<IStreamingWriter<byte>>(output);
         sqlBatch.Write(writer);
-        writer.Commit();
-        dataStreamWriter.EndMessage();
+        dataStreamWriter.Advance(writer.BufferedBytes, endMessage: true);
+        // writer.Commit();
+        // dataStreamWriter.EndMessage();
 
         await dataStreamWriter.FlushAsync();
 
-        var pipeReader = new SimplePipeReader(stream.Reader, Timeout.InfiniteTimeSpan);
-        await pipeReader.ReadAtLeastAsync(43 + 8);
-        pipeReader.Advance(43);
-        var tokenReader = new TokenReader(pipeReader);
-        await tokenReader.MoveNextAsync();
-        await tokenReader.MoveNextAsync();
-        await tokenReader.MoveNextAsync();
-        await tokenReader.MoveNextAsync();
-        await tokenReader.MoveNextAsync();
+        var packetStream = new TdsPacketStream(connection.Stream);
+        var streamReader = new BufferingStreamReader(packetStream);
+        await streamReader.ReadAtLeastAsync(43);
+        streamReader.Advance(43);
 
-        await tokenReader.MoveNextAsync();
-        await tokenReader.MoveNextAsync();
-        await tokenReader.MoveNextAsync();
-        await tokenReader.MoveNextAsync();
+
+
+
+
+        // var pipeReader = new SimplePipeReader(connection.Reader, Timeout.InfiniteTimeSpan);
+        // await pipeReader.ReadAtLeastAsync(43 + 8);
+        // pipeReader.Advance(43);
+        // var tokenReader = new TokenReader(pipeReader);
+        // await tokenReader.MoveNextAsync();
+        // await tokenReader.MoveNextAsync();
+        // await tokenReader.MoveNextAsync();
+        // await tokenReader.MoveNextAsync();
+        // await tokenReader.MoveNextAsync();
+        //
+        // await tokenReader.MoveNextAsync();
+        // await tokenReader.MoveNextAsync();
+        // await tokenReader.MoveNextAsync();
+        // await tokenReader.MoveNextAsync();
     }
 }

@@ -81,11 +81,11 @@ sealed class SqlServerPipeConnection: SqlServerSocketConnection, IDisposable
 
 sealed class SqlServerStreamConnection : SqlServerSocketConnection, IDisposable, IAsyncDisposable
 {
-    readonly SealedNetworkStream _stream;
+    public Stream Stream { get; }
 
     SqlServerStreamConnection(SealedNetworkStream stream)
     {
-        _stream = stream;
+        Stream = stream;
         Reader = PipeReader.Create(stream, new StreamPipeReaderOptions(bufferSize: DefaultReaderSegmentSize, useZeroByteReads: false));
         Writer = PipeWriter.Create(stream, new StreamPipeWriterOptions(minimumBufferSize: DefaultWriterSegmentSize));;
     }
@@ -139,7 +139,7 @@ sealed class SqlServerStreamConnection : SqlServerSocketConnection, IDisposable,
     {
         Reader.Complete();
         Writer.Complete();
-        _stream.Dispose();
+        Stream.Dispose();
     }
 
     public async ValueTask DisposeAsync()
@@ -147,7 +147,7 @@ sealed class SqlServerStreamConnection : SqlServerSocketConnection, IDisposable,
         await Reader.CompleteAsync().ConfigureAwait(false);
         await Writer.CompleteAsync().ConfigureAwait(false);
 #if !NETSTANDARD2_0
-        await _stream.DisposeAsync().ConfigureAwait(false);
+        await Stream.DisposeAsync().ConfigureAwait(false);
 #else
         _stream.Dispose();
 #endif

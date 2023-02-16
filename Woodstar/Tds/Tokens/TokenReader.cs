@@ -7,6 +7,7 @@ using System.Diagnostics.CodeAnalysis;
 using System.IO.Pipelines;
 using System.Runtime.CompilerServices;
 using System.Text;
+using System.Threading;
 using System.Threading.Tasks;
 using Woodstar.Pipelines;
 using Woodstar.Buffers;
@@ -16,14 +17,14 @@ namespace Woodstar.Tds.Tokens;
 
 class TokenReader
 {
-    readonly SimplePipeReader _pipeReader;
+    readonly BufferingStreamReader _streamReader;
     private readonly ResultSetReader _resultSetReader;
     private bool _rowReaderRented;
 
-    public TokenReader(SimplePipeReader pipeReader)
+    public TokenReader(BufferingStreamReader streamReader)
     {
-        _pipeReader = pipeReader;
-        _resultSetReader = new(pipeReader);
+        _streamReader = streamReader;
+        _resultSetReader = new(streamReader);
     }
 
     public Token Current { get; private set; }
@@ -45,7 +46,7 @@ class TokenReader
             _rowReaderRented = false;
         }
 
-        ReadOnlySequence<byte> result;
+        BufferReader result;
         long consumed;
         Token? token;
         TokenType? tokenType = default;
@@ -53,7 +54,7 @@ class TokenReader
 
         do
         {
-            result = await _pipeReader.ReadAtLeastAsync(1);
+            result = await _streamReader.ReadAtLeastAsync(1);
         }
         while ((status = MoveNext(result, ref tokenType, out token, out consumed)) is ReadStatus.NeedMoreData);
 
@@ -64,28 +65,20 @@ class TokenReader
         Debug.Assert(token is not null);
         Current = token;
 
-
-        static ReadStatus MoveNext(ReadOnlySequence<byte> result, ref TokenType? tokenType, out Token? token, out long consumed)
+        static async ValueTask MoveNext(BufferingStreamReader streamReader, BufferReader reader, CancellationToken cancellationToken = default)
         {
-            token = null;
-            consumed = 0;
-            var reader = new DataStreamReader(result);
-
-            if (tokenType is null)
-            {
-                var tokenTypeReadResult = reader.TryRead(out var tokenTypeByte);
-                Debug.Assert(tokenTypeReadResult);
-                tokenType = (TokenType)tokenTypeByte;
-                if (BackendMessage.DebugEnabled && !Enum.IsDefined(tokenType.Value))
-                    throw new ArgumentOutOfRangeException();
-            }
+            var tokenTypeReadResult = reader.TryRead(out var tokenTypeByte);
+            Debug.Assert(tokenTypeReadResult);
+            var tokenType = (TokenType)tokenTypeByte;
+            if (BackendMessage.DebugEnabled && !Enum.IsDefined(tokenType))
+                throw new ArgumentOutOfRangeException();
 
             switch (tokenType)
             {
                 case TokenType.LOGINACK:
                 {
-                    if (!reader.TryReadLittleEndian(out ushort length) && !reader.HasAtLeast(length))
-                        return ReadStatus.NeedMoreData;
+                    if (!reader.TryReadLittleEndian(out ushort length) || reader.Remaining < length)
+                        reader = await streamReader.ReadAtLeastAsync(length, cancellationToken);
 
                     reader.TryRead(out var @interface);
                     Span<byte> tdsVersion = stackalloc byte[4];
@@ -111,8 +104,10 @@ class TokenReader
                     reader.TryRead(out var @class);
                     reader.TryReadUsVarchar(out var msgText);
                     reader.TryReadBVarchar(out var serverName);
-                    reader.TryReadBVarchar(out var procName);
+                    // reader.TryReadBVarchar(out var procName);
                     reader.TryReadLittleEndian(out int lineNumber);
+
+                    // reader.Consume(length);
 
                     token = new InfoToken(number, state, @class, msgText, serverName, procName, lineNumber);
                     consumed = reader.Consumed;
