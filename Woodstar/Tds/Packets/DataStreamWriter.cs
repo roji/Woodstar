@@ -163,7 +163,6 @@ sealed class DataStreamWriter: IStreamingWriter<byte>
 
     public Memory<byte> GetMemory(int sizeHint = 0)
     {
-        ThrowIfNotStarted();
         var scratchBufferCount = _scratchBufferCount;
         // When there is enough space in the scratch buffer we can use this as the buffer we return.
         if (scratchBufferCount > 0 && scratchBufferCount < ScratchBufferSize && sizeHint <= ScratchBufferSize - scratchBufferCount)

@@ -191,7 +191,23 @@ class StreamingWriter<TWriter> : IStreamingWriter<byte> where TWriter : IStreami
 
     public ValueTask FlushAsync(CancellationToken cancellationToken = default) => _output.FlushAsync(cancellationToken);
 
+    protected void Reset()
+    {
+        _bytesCommitted = 0;
+        BufferedBytes = 0;
+        _memory = Memory<byte>.Empty;
+    }
+
     public static implicit operator BufferWriter<TWriter>(StreamingWriter<TWriter> writer) => BufferWriter<TWriter>.CreateFrom(writer);
+}
+
+class ResettableStreamingWriter<TWriter> : StreamingWriter<TWriter> where TWriter : IStreamingWriter<byte>
+{
+    public ResettableStreamingWriter(TWriter output) : base(output)
+    {
+    }
+
+    public new void Reset() => base.Reset();
 }
 
 // Cannot share the extensions between this and BufferWriter because ref structs (BufferWriter) can't implement interfaces, not even for the purpose of constrained calls.
@@ -245,7 +261,7 @@ static class StreamingWriterExtensions
         writer.Advance(sizeof(long));
     }
 
-    public static void WriteString<T>(this StreamingWriter<T> writer, string value, Encoding encoding, int? encodedLength = null) where T : IStreamingWriter<byte>
+    public static void WriteString<T>(this StreamingWriter<T> writer, string? value, Encoding encoding, int? encodedLength = null) where T : IStreamingWriter<byte>
     {
         writer.WriteEncoded(value, encoding, encodedLength);
     }
@@ -277,7 +293,6 @@ static class StreamingWriterExtensions
         BinaryPrimitives.WriteUInt64LittleEndian(writer.Span, value);
         writer.Advance(sizeof(ulong));
     }
-
     
     public static void WriteCString<T>(this StreamingWriter<T> writer, string value, Encoding encoding, int? encodedLength = null) where T : IStreamingWriter<byte>
         => writer.WriteCString(value.AsSpan(), encoding, encodedLength);

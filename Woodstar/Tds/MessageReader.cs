@@ -30,7 +30,7 @@ interface IHeader<THeader>: IEquatable<THeader> where THeader: struct, IHeader<T
     bool TryParse(in ReadOnlySpan<byte> unreadSpan, in ReadOnlySequence<byte> buffer, long bufferStart, out THeader header);
 
     /// <summary>
-    /// Header equality up to type (packet code, flags, whatever is enough to distinguish *types of messages*).
+    /// MessageType equality up to type (packet code, flags, whatever is enough to distinguish *types of messages*).
     /// </summary>
     /// <param name="other"></param>
     /// <returns></returns>
@@ -334,7 +334,7 @@ ref struct MessageReader<THeader> where THeader : struct, IHeader<THeader>, IEqu
     public readonly record struct ResumptionData(
         // The current message at the time of the suspend.
         THeader Header,
-        // Where we need to start relative to the message in Header.
+        // Where we need to start relative to the message in MessageType.
         uint MessageIndex
     )
     {

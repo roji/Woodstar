@@ -5,11 +5,11 @@ namespace Woodstar.Tds.Tokens;
 
 class ColumnMetadataToken : Token
 {
-    public List<ColumnData> ColumnDatums { get; }
+    public List<ColumnData> ColumnData { get; }
 
-    public ColumnMetadataToken(List<ColumnData> columnDatums)
+    public ColumnMetadataToken(List<ColumnData> columnData)
     {
-        ColumnDatums = columnDatums;
+        ColumnData = columnData;
     }
 }
 

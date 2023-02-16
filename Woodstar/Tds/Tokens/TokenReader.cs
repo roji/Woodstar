@@ -18,19 +18,16 @@ class TokenReader
         _streamReader = streamReader;
         _resultSetReader = new(streamReader);
     }
-
-    public Token Current { get; private set; }
-
-    public ResultSetReader GetRowReader(List<ColumnData> columnData)
+    
+    public async ValueTask<ResultSetReader> GetResultSetReaderAsync(List<ColumnData> columnData, CancellationToken cancellationToken = default)
     {
-        Debug.Assert(Current is RowToken);
         Debug.Assert(!_rowReaderRented);
+        await ReadAndExpectAsync<RowToken>(cancellationToken);
         _resultSetReader.Initialize(columnData);
-
         return _resultSetReader;
     }
 
-    public async ValueTask MoveNextAsync(CancellationToken cancellationToken = default)
+    public async ValueTask<Token> ReadAsync(CancellationToken cancellationToken = default)
     {
         if (_rowReaderRented)
         {
@@ -46,12 +43,19 @@ class TokenReader
         if (BackendMessage.DebugEnabled && !Enum.IsDefined(tokenType))
             throw new ArgumentOutOfRangeException();
 
+        Token result; 
         switch (tokenType)
         {
             case TokenType.LOGINACK:
             {
-                // TODO can go out of bounds of underlying stream reader buffer.
-                if (!reader.TryReadLittleEndian(out ushort length) || reader.Remaining < length)
+                // TODO ushort can go out of bounds of underlying stream reader buffer.
+                if (!reader.TryReadLittleEndian(out ushort length))
+                {
+                    reader = await streamReader.ReadAtLeastAsync(length, cancellationToken);
+                    reader.TryReadLittleEndian(out length);
+                }
+
+                if (reader.Remaining < length)
                     reader = await streamReader.ReadAtLeastAsync(length, cancellationToken);
 
                 reader.TryRead(out var @interface);
@@ -62,14 +66,20 @@ class TokenReader
                 reader.TryReadTo(versionBytes.AsSpan());
                 var version = new Version(versionBytes[0], versionBytes[1], (versionBytes[2] << 8) | versionBytes[3]);
 
-                Current = new LoginAckToken(@interface, tdsVersion, programName!, version);
+                result = new LoginAckToken(@interface, tdsVersion, programName!, version);
                 reader.Commit();
                 break;
             }
             case TokenType.ERROR:
             case TokenType.INFO:
             {
-                if (!reader.TryReadLittleEndian(out ushort length) || reader.Remaining < length)
+                if (!reader.TryReadLittleEndian(out ushort length))
+                {
+                    reader = await streamReader.ReadAtLeastAsync(length, cancellationToken);
+                    reader.TryReadLittleEndian(out length);
+                }
+
+                if (reader.Remaining < length)
                     reader = await streamReader.ReadAtLeastAsync(length, cancellationToken);
 
                 reader.TryReadLittleEndian(out int number);
@@ -80,7 +90,7 @@ class TokenReader
                 reader.TryReadBVarchar(out var procName, out _);
                 reader.TryReadLittleEndian(out int lineNumber);
 
-                Current = tokenType is TokenType.INFO
+                result = tokenType is TokenType.INFO
                     ? new InfoToken(number, state, @class, msgText!, serverName!, procName!, lineNumber)
                     : new ErrorToken(number, state, @class, msgText!, serverName!, procName!, lineNumber);
                 reader.Commit();
@@ -88,7 +98,13 @@ class TokenReader
             }
             case TokenType.ENVCHANGE:
             {
-                if (!reader.TryReadLittleEndian(out ushort length) || reader.Remaining < length)
+                if (!reader.TryReadLittleEndian(out ushort length))
+                {
+                    reader = await streamReader.ReadAtLeastAsync(length, cancellationToken);
+                    reader.TryReadLittleEndian(out length);
+                }
+
+                if (reader.Remaining < length)
                     reader = await streamReader.ReadAtLeastAsync(length, cancellationToken);
 
                 reader.TryRead(out var envTypeByte);
@@ -103,7 +119,7 @@ class TokenReader
                     case EnvChangeType.ResetAck:
                         reader.TryReadBVarchar(out var newValue, out _);
                         reader.TryReadBVarchar(out var oldValue, out _);
-                        Current = new EnvChangeToken(envType, newValue!, oldValue!);
+                        result = new EnvChangeToken(envType, newValue!, oldValue!);
                         break;
                     default:
                         throw new ArgumentOutOfRangeException();
@@ -125,21 +141,24 @@ class TokenReader
 
                 reader.TryReadLittleEndian(out ushort curCmd);
                 reader.TryReadLittleEndian(out ulong doneRowCount);
-                Current = new DoneToken(status, curCmd, doneRowCount);
+                result = new DoneToken(status, curCmd, doneRowCount);
                 reader.Commit();
                 break;
             }
             case TokenType.COLMETADATA:
             {
                 if (!reader.TryReadLittleEndian(out ushort count))
+                {
                     reader = await streamReader.ReadAtLeastAsync(sizeof(ushort), cancellationToken);
+                    reader.TryReadLittleEndian(out count);
+                }
 
                 count = (ushort)(count is 0xFF ? 0 : count);
 
                 if (count is 0)
                 {
                     reader.Advance(sizeof(ushort) * 2);
-                    Current = new ColumnMetadataToken(new());
+                    result = new ColumnMetadataToken(new());
                     break;
                 }
 
@@ -190,7 +209,10 @@ class TokenReader
                         case DataTypeCode.GUIDTYPE:
                         {
                             if (!reader.TryRead(out var length))
+                            {
                                 reader = await streamReader.ReadAtLeastAsync(sizeof(byte), cancellationToken);
+                                reader.TryRead(out length);
+                            }
 
                             type = new DataType(typeCode, nullable: length == 0, DataTypeLengthKind.VariableByte, length);
                             break;
@@ -198,7 +220,10 @@ class TokenReader
                         case DataTypeCode.INTNTYPE:
                         {
                             if (!reader.TryRead(out var length))
+                            {
                                 reader = await streamReader.ReadAtLeastAsync(sizeof(byte), cancellationToken);
+                                reader.TryRead(out length);
+                            }
 
                             type = new DataType(typeCode, nullable: length == 0, DataTypeLengthKind.VariableByte, length);
                             break;
@@ -206,7 +231,10 @@ class TokenReader
                         case DataTypeCode.BITNTYPE:
                         {
                             if (!reader.TryRead(out var length))
+                            {
                                 reader = await streamReader.ReadAtLeastAsync(sizeof(byte), cancellationToken);
+                                reader.TryRead(out length);
+                            }
 
                             type = new DataType(typeCode, nullable: length == 0, DataTypeLengthKind.VariableByte, length);
                             break;
@@ -283,18 +311,21 @@ class TokenReader
                     }
 
                     if (!reader.TryReadBVarchar(out var columnName, out var totalByteLength))
+                    {
                         reader = await streamReader.ReadAtLeastAsync(totalByteLength.Value, cancellationToken);
+                        reader.TryReadBVarchar(out columnName, out _);
+                    }
 
-                    columns.Add(new ColumnData(userType, flags, type, columnName));
+                    columns.Add(new ColumnData(userType, flags, type, columnName!));
                 }
 
                 reader.Commit();
-                Current = new ColumnMetadataToken(columns);
+                result = new ColumnMetadataToken(columns);
                 break;
             }
 
             case TokenType.ROW:
-                Current = new RowToken();
+                result = new RowToken();
                 reader.Commit();
                 break;
 
@@ -317,6 +348,23 @@ class TokenReader
             case TokenType.DONEINPROC:
             default:
                 throw new ArgumentOutOfRangeException();
+        }
+
+        return result;
+    }
+
+    public ValueTask<T> ReadAndExpectAsync<T>(CancellationToken cancellationToken = default) where T : Token
+    {
+        var task = ReadAsync(cancellationToken);
+        if (task.IsCompletedSuccessfully)
+            return task.Result is T value ? new(value) : throw new ArgumentOutOfRangeException(nameof(T), task.Result, null);
+
+        return Core(task);
+
+        async ValueTask<T> Core(ValueTask<Token> task)
+        {
+            var value = await task;
+            return value as T ?? throw new ArgumentOutOfRangeException(nameof(T), value, null);
         }
     }
 

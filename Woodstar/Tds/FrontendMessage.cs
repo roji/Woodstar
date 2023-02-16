@@ -4,6 +4,7 @@ using System.IO;
 using System.Threading;
 using System.Threading.Tasks;
 using Woodstar.Buffers;
+using Woodstar.Tds.Packets;
 
 namespace Woodstar.Tds;
 
@@ -17,20 +18,20 @@ static class FrontendMessage
 
         public BufferedMessage(ICopyableBuffer<byte> buffer) => _buffer = buffer;
 
-        public bool CanWrite => true;
+        public static PacketHeader MessageType => throw new NotImplementedException();
+        public bool CanWriteSynchronously => true;
         public void Write<T>(ref BufferWriter<T> buffer) where T : IBufferWriter<byte>
             => _buffer.CopyTo(buffer.Output);
     }
 
-    class StreamingMessage: IStreamingFrontendMessage
+    class StreamingMessage: IFrontendMessage
     {
         readonly Stream _stream;
 
         public StreamingMessage(Stream stream) => _stream = stream;
 
-        public bool CanWrite => false;
-        public void Write<T>(ref BufferWriter<T> buffer) where T : IBufferWriter<byte> => throw new NotSupportedException();
-
+        public static PacketHeader MessageType => throw new NotImplementedException();
+        public bool CanWriteSynchronously => false;
         public async ValueTask<FlushResult> WriteAsync<T>(MessageWriter<T> writer, CancellationToken cancellationToken = default) where T : IStreamingWriter<byte>
         {
             var read = 0;
@@ -65,11 +66,13 @@ interface IFrontendHeader<THeader> where THeader: struct, IFrontendHeader<THeade
 
 interface IFrontendMessage
 {
-    bool CanWrite { get; }
-    void Write<T>(ref BufferWriter<T> buffer) where T : IBufferWriter<byte>;
-}
+    static abstract PacketHeader MessageType { get; }
 
-interface IStreamingFrontendMessage: IFrontendMessage
-{
-    ValueTask<FlushResult> WriteAsync<T>(MessageWriter<T> writer, CancellationToken cancellationToken = default) where T : IStreamingWriter<byte>;
+    bool CanWriteSynchronously { get; }
+
+    void Write<T>(ref BufferWriter<T> buffer) where T : IBufferWriter<byte>
+        => throw new NotSupportedException();
+
+    ValueTask WriteAsync<T>(StreamingWriter<T> writer, CancellationToken cancellationToken = default) where T : IStreamingWriter<byte>
+        => throw new NotSupportedException();
 }

@@ -6,7 +6,7 @@ namespace Woodstar.Tds.SqlServer;
 record SqlServerOptions
 {
     public required EndPoint EndPoint { get; init; }
-    public required string Username { get; init; }
+    public required string? Username { get; init; }
     public string? Password { get; init; }
     public string? Database { get; init; }
     // Hardcoded to UTF8 until a use for another encoding comes up.

@@ -191,11 +191,25 @@ static class BufferWriterExtensions
         buffer.Write(value);
     }
 
+    public static void WriteUIntLittleEndian<T>(ref this BufferWriter<T> buffer, uint value)  where T : IBufferWriter<byte>
+    {
+        buffer.Ensure(sizeof(uint));
+        BinaryPrimitives.WriteUInt32LittleEndian(buffer.Span, value);
+        buffer.Advance(sizeof(uint));
+    }
+
+    public static void WriteUShortLittleEndian<T>(ref this BufferWriter<T> buffer, ushort value)  where T : IBufferWriter<byte>
+    {
+        buffer.Ensure(sizeof(ushort));
+        BinaryPrimitives.WriteUInt16LittleEndian(buffer.Span, value);
+        buffer.Advance(sizeof(ushort));
+    }
+
     public static void WriteUShort<T>(ref this BufferWriter<T> buffer, ushort value)  where T : IBufferWriter<byte>
     {
-        buffer.Ensure(sizeof(short));
+        buffer.Ensure(sizeof(ushort));
         BinaryPrimitives.WriteUInt16BigEndian(buffer.Span, value);
-        buffer.Advance(sizeof(short));
+        buffer.Advance(sizeof(ushort));
     }
 
     public static void WriteShort<T>(ref this BufferWriter<T> buffer, short value)  where T : IBufferWriter<byte>
@@ -209,48 +223,6 @@ static class BufferWriterExtensions
     {
         buffer.Ensure(sizeof(int));
         BinaryPrimitives.WriteInt32BigEndian(buffer.Span, value);
-        buffer.Advance(sizeof(int));
-    }
-
-    public static void WriteBigEndian<T>(ref this BufferWriter<T> buffer, short value) where T : IBufferWriter<byte>
-    {
-        buffer.Ensure(sizeof(int));
-        BinaryPrimitives.WriteInt16BigEndian(buffer.Span, value);
-        buffer.Advance(sizeof(int));
-    }
-
-    public static void WriteBigEndian<T>(ref this BufferWriter<T> buffer, ushort value) where T : IBufferWriter<byte>
-    {
-        buffer.Ensure(sizeof(int));
-        BinaryPrimitives.WriteUInt16BigEndian(buffer.Span, value);
-        buffer.Advance(sizeof(int));
-    }
-
-    public static void WriteBigEndian<T>(ref this BufferWriter<T> buffer, int value) where T : IBufferWriter<byte>
-    {
-        buffer.Ensure(sizeof(int));
-        BinaryPrimitives.WriteInt32BigEndian(buffer.Span, value);
-        buffer.Advance(sizeof(int));
-    }
-
-    public static void WriteBigEndian<T>(ref this BufferWriter<T> buffer, uint value) where T : IBufferWriter<byte>
-    {
-        buffer.Ensure(sizeof(int));
-        BinaryPrimitives.WriteUInt32BigEndian(buffer.Span, value);
-        buffer.Advance(sizeof(int));
-    }
-
-    public static void WriteBigEndian<T>(ref this BufferWriter<T> buffer, long value) where T : IBufferWriter<byte>
-    {
-        buffer.Ensure(sizeof(int));
-        BinaryPrimitives.WriteInt64BigEndian(buffer.Span, value);
-        buffer.Advance(sizeof(int));
-    }
-
-    public static void WriteBigEndian<T>(ref this BufferWriter<T> buffer, ulong value) where T : IBufferWriter<byte>
-    {
-        buffer.Ensure(sizeof(int));
-        BinaryPrimitives.WriteUInt64BigEndian(buffer.Span, value);
         buffer.Advance(sizeof(int));
     }
 
@@ -268,6 +240,11 @@ static class BufferWriterExtensions
     {
         buffer.WriteEncoded(value, encoding, encodedLength);
         buffer.WriteByte(0);
+    }
+
+    public static void WriteString<T>(ref this BufferWriter<T> buffer, ReadOnlySpan<char> value, Encoding encoding, int? encodedLength = null) where T : IBufferWriter<byte>
+    {
+        buffer.WriteEncoded(value, encoding, encodedLength);
     }
 
     public static void WriteByte<T>(ref this BufferWriter<T> buffer, byte b)

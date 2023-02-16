@@ -2,6 +2,7 @@ using System;
 using System.Collections.Generic;
 using System.Diagnostics;
 using System.Diagnostics.CodeAnalysis;
+using System.IO;
 using System.IO.Pipelines;
 using System.Runtime.CompilerServices;
 using System.Text;
@@ -10,6 +11,10 @@ using System.Threading.Tasks;
 using System.Threading.Tasks.Sources;
 using Woodstar.Buffers;
 using Woodstar.Pipelines;
+using Woodstar.Tds.Messages;
+using Woodstar.Tds.Packets;
+using Woodstar.Tds.SqlServer;
+using Woodstar.Tds.Tokens;
 
 namespace Woodstar.Tds.Tds33;
 
@@ -30,11 +35,10 @@ class Tds33Protocol : Protocol
 {
     static Tds33ProtocolOptions DefaultProtocolOptions { get; } = new();
     readonly Tds33ProtocolOptions _protocolOptions;
-    readonly SimplePipeReader _reader;
+    readonly BufferingStreamReader _reader;
     readonly PipeWriter _pipeWriter;
 
     readonly ResettableFlushControl _flushControl;
-    readonly MessageWriter<PipeStreamingWriter> _defaultMessageWriter;
 
     // Lock held for the duration of an individual message write or an entire exclusive use.
     readonly SemaphoreSlim _messageWriteLock = new(1);
@@ -42,6 +46,10 @@ class Tds33Protocol : Protocol
 
     readonly PgV3OperationSource _operationSourceSingleton;
     readonly PgV3OperationSource _exclusiveOperationSourceSingleton;
+
+    readonly ResettableStreamingWriter<DataStreamWriter> _streamingWriter;
+    readonly DataStreamWriter _dataStreamWriter;
+    readonly TokenReader _tokenReader;
 
     // The pool exists as there is a timeframe between a reader completing (and its slot) and the owner resetting the reader.
     // During this time the next operation in the queue might request a reader as well.
@@ -53,13 +61,16 @@ class Tds33Protocol : Protocol
     volatile Exception? _completingException;
     volatile int _pendingExclusiveUses;
 
-    Tds33Protocol(PipeWriter writer, PipeReader reader, Encoding encoding, Tds33ProtocolOptions? protocolOptions = null)
+    Tds33Protocol(PipeWriter writer, Stream stream, Encoding encoding, Tds33ProtocolOptions? protocolOptions = null)
     {
         _protocolOptions = protocolOptions ?? DefaultProtocolOptions;
         _pipeWriter = writer;
         _flushControl = new ResettableFlushControl(writer, _protocolOptions.WriteTimeout, Math.Max(MessageWriter.DefaultAdvisoryFlushThreshold , _protocolOptions.FlushThreshold));
-        _defaultMessageWriter = new MessageWriter<PipeStreamingWriter>(new PipeStreamingWriter(_pipeWriter), _flushControl);
-        _reader = new SimplePipeReader(reader, _protocolOptions.ReadTimeout);
+        var pipeStreamingWriter = new PipeStreamingWriter(_pipeWriter);
+        _dataStreamWriter = new DataStreamWriter(pipeStreamingWriter, 4096);
+        _streamingWriter = new ResettableStreamingWriter<DataStreamWriter>(_dataStreamWriter);
+        _reader = new BufferingStreamReader(new TdsPacketStream(stream));
+        _tokenReader = new TokenReader(_reader);
         _operations = new Queue<PgV3OperationSource>();
         _operationSourceSingleton = new PgV3OperationSource(this, exclusiveUse: false, pooled: true);
         _exclusiveOperationSourceSingleton = new PgV3OperationSource(this, exclusiveUse: true, pooled: true);
@@ -76,6 +87,8 @@ class Tds33Protocol : Protocol
 
     bool IsCompleted => _state is ProtocolState.Completed;
 
+    public TokenReader Reader => _tokenReader;
+    
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     PgV3OperationSource ThrowIfInvalidSlot(OperationSlot slot, bool allowUnbound = false, bool allowActivated = true)
     {
@@ -137,7 +150,6 @@ class Tds33Protocol : Protocol
             if (!IsCompleted)
             {
                 // We must reset the writer as it holds onto an output segment that is now flushed.
-                _defaultMessageWriter.Reset();
                 _flushControl.Reset();
 
                 if (op is null)
@@ -159,7 +171,45 @@ class Tds33Protocol : Protocol
         internal BatchWriter(Tds33Protocol instance) => _instance = instance;
 
         public ValueTask WriteMessageAsync<T>(T message, CancellationToken cancellationToken = default) where T : IFrontendMessage
-            => WriteMessageUnsynchronized(_instance._defaultMessageWriter, message, cancellationToken);
+        {
+            var dataStreamWriter = _instance._dataStreamWriter;
+            var streamingWriter = _instance._streamingWriter;
+            if (message.CanWriteSynchronously)
+            {
+                try
+                {
+                    var messageType = T.MessageType;
+                    dataStreamWriter.StartMessage(messageType.Type, messageType.Status);
+                    var buffer = new BufferWriter<DataStreamWriter>(dataStreamWriter);
+                    message.Write(ref buffer);
+                    Debug.Assert(buffer.BufferedBytes > 0, "Message writer should not flush all data as this may prevent packet end of message finalization.");
+                    dataStreamWriter.Advance(buffer.BufferedBytes, endMessage: true);
+                    return new ValueTask();
+                }
+                finally
+                {
+                    streamingWriter.Reset();
+                }
+            }
+
+            return WriteAsync(dataStreamWriter, streamingWriter, message, cancellationToken);
+
+            static async ValueTask WriteAsync(DataStreamWriter dataStreamWriter, ResettableStreamingWriter<DataStreamWriter> streamingWriter, T message, CancellationToken cancellationToken = default)
+            {
+                try
+                {
+                    var messageType = T.MessageType;
+                    dataStreamWriter.StartMessage(messageType.Type, messageType.Status);
+                    await message.WriteAsync(streamingWriter, cancellationToken);
+                    Debug.Assert(streamingWriter.BufferedBytes > 0, "Message writer should not flush all data as this may prevent packet end of message finalization.");
+                    dataStreamWriter.Advance(streamingWriter.BufferedBytes, endMessage: true);
+                }
+                finally
+                {
+                    streamingWriter.Reset();
+                }
+            }
+        }
     }
 
     public IOCompletionPair WriteMessageBatchAsync<TState>(OperationSlot slot, Func<BatchWriter, TState, CancellationToken, ValueTask> batchWriter, TState state, bool flushHint = true, CancellationToken cancellationToken = default)
@@ -183,10 +233,10 @@ class Tds33Protocol : Protocol
                 if (instance._flushControl.WriterCompleted)
                     instance.MoveToComplete();
                 else if (flushHint && instance._flushControl.UnflushedBytes > 0)
-                    await instance._defaultMessageWriter.FlushAsync(observeFlushThreshold: false, cancellationToken).ConfigureAwait(false);
+                    await instance._flushControl.FlushAsync(observeFlushThreshold: false, cancellationToken).ConfigureAwait(false);
 
-                Debug.Assert(instance._defaultMessageWriter.BytesCommitted > 0);
-                return new WriteResult(instance._defaultMessageWriter.BytesCommitted);
+                // Debug.Assert(instance._defaultMessageWriter.BytesCommitted > 0);
+                return WriteResult.Unknown;
             }
             catch (Exception ex) when (!IsTimeoutOrCallerOCE(ex, cancellationToken))
             {
@@ -197,7 +247,6 @@ class Tds33Protocol : Protocol
             {
                 if (!instance.IsCompleted)
                 {
-                    instance._defaultMessageWriter.Reset();
                     instance._flushControl.Reset();
 
                     // TODO we can always add a flag to control this for non exclusive use (e.g. something like WriteFlags.EndWrites)
@@ -208,38 +257,6 @@ class Tds33Protocol : Protocol
                     }
                 }
             }
-        }
-    }
-
-    // TODO this is not up-to-date with the async implementation.
-    public void WriteMessage<T>(T message, TimeSpan timeout = default) where T : IFrontendMessage
-    {
-        // TODO probably want to pass the remaining timeout to flush control.
-        if (!_messageWriteLock.Wait(timeout))
-            throw new TimeoutException("The operation has timed out.");
-
-        _flushControl.InitializeAsBlocking(timeout);
-        try
-        {
-            WriteMessageUnsynchronized(_defaultMessageWriter, message).GetAwaiter().GetResult();
-            if (_flushControl.WriterCompleted)
-                MoveToComplete();
-            else
-                _defaultMessageWriter.FlushAsync(observeFlushThreshold: false).GetAwaiter().GetResult();
-        }
-        catch (Exception ex) when (ex is not TimeoutException)
-        {
-            MoveToComplete(ex);
-            throw;
-        }
-        finally
-        {
-            if (!IsCompleted)
-            {
-                _defaultMessageWriter.Reset();
-                _flushControl.Reset();
-            }
-            _messageWriteLock.Release();
         }
     }
 
@@ -256,11 +273,9 @@ class Tds33Protocol : Protocol
         if (brokenRead)
         {
             _pipeWriter.Complete(exception);
-            _reader.Complete(exception);
         }
         else
         {
-            _reader.Complete(exception);
             _pipeWriter.Complete(exception);
         }
         _messageWriteLock.Dispose();
@@ -268,27 +283,26 @@ class Tds33Protocol : Protocol
     }
 
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
-    static ValueTask WriteMessageUnsynchronized<TWriter, T>(MessageWriter<TWriter> writer, T message, CancellationToken cancellationToken = default)
+    static ValueTask WriteMessageUnsynchronized<TWriter, T>(DataStreamWriter dataStreamWriter, StreamingWriter<TWriter> streamingWriter, T message, CancellationToken cancellationToken = default)
         where TWriter : IStreamingWriter<byte> where T : IFrontendMessage
     {
-        if (message.CanWrite)
+        if (message.CanWriteSynchronously)
         {
-            var buffer = writer.GetBufferWriter();
+            var buffer = new BufferWriter<DataStreamWriter>(dataStreamWriter);
             message.Write(ref buffer);
-            writer.CommitBufferWriter(buffer);
+            Debug.Assert(buffer.BufferedBytes > 0, "Message writer should not flush all data as this may prevent packet end of message finalization.");
+            dataStreamWriter.Advance(buffer.BufferedBytes, endMessage: true);
             return new ValueTask();
         }
 
-        if (message is IStreamingFrontendMessage streamingMessage)
+        return WriteAsync(dataStreamWriter, streamingWriter, message, cancellationToken);
+
+        static async ValueTask WriteAsync(DataStreamWriter dataStreamWriter, StreamingWriter<TWriter> streamingWriter, T message, CancellationToken cancellationToken = default)
         {
-            var result =  streamingMessage.WriteAsync(writer, cancellationToken);
-            return result.IsCompletedSuccessfully ? new ValueTask() : new ValueTask(result.AsTask());
+            await message.WriteAsync(streamingWriter, cancellationToken);
+            Debug.Assert(streamingWriter.BufferedBytes > 0, "Message writer should not flush all data as this may prevent packet end of message finalization.");
+            dataStreamWriter.Advance(streamingWriter.BufferedBytes, endMessage: true);
         }
-
-        ThrowCannotWrite();
-        return new ValueTask();
-
-        static void ThrowCannotWrite() => throw new InvalidOperationException("Either CanWrite should return true or IStreamingFrontendMessage should be implemented to write this message.");
     }
 //
 //     public ValueTask<T> ReadMessageAsync<T>(T message, CancellationToken cancellationToken = default) where T : IBackendMessage<TdsPacketHeader> => ProtocolReader.ReadAsync(this, message, cancellationToken);
@@ -323,7 +337,7 @@ class Tds33Protocol : Protocol
 //             uint remainingMessage;
 //             // If we're in a message but it's consumed we assume the reader wants to read the next header.
 //             // Otherwise we'll return either remainingMessage or maximumMessageChunk, whichever is smaller.
-//             if (!resumptionData.IsDefault && (remainingMessage = resumptionData.Header.Length - resumptionData.MessageIndex) > 0)
+//             if (!resumptionData.IsDefault && (remainingMessage = resumptionData.MessageType.Length - resumptionData.MessageIndex) > 0)
 //                 minimumSize = remainingMessage < maximumMessageChunk ? remainingMessage : (uint)maximumMessageChunk;
 //
 //             var result = consumed + minimumSize;
@@ -339,7 +353,7 @@ class Tds33Protocol : Protocol
 //         {
 //             // Try to read error response.
 //             Exception exception;
-//             if (readerException is null && !resumptionData.IsDefault && resumptionData.Header.Type == BackendCode.ErrorResponse)
+//             if (readerException is null && !resumptionData.IsDefault && resumptionData.MessageType.Type == BackendCode.ErrorResponse)
 //             {
 //                 // When we're not Ready yet we're in the startup phase where PG closes the connection without an RFQ.
 //                 var errorResponse = new ErrorResponse(protocol.Encoding, expectRfq: protocol.State is not ProtocolState.Created);
@@ -356,7 +370,7 @@ class Tds33Protocol : Protocol
 //             }
 //             else
 //             {
-//                 exception = new Exception($"Protocol desync on message: {typeof(T).FullName}, expected different response{(resumptionData.IsDefault ? "" : ", actual code: " + resumptionData.Header.Type)}.", readerException);
+//                 exception = new Exception($"Protocol desync on message: {typeof(T).FullName}, expected different response{(resumptionData.IsDefault ? "" : ", actual code: " + resumptionData.MessageType.Type)}.", readerException);
 //             }
 //             return exception;
 //         }
@@ -498,75 +512,60 @@ class Tds33Protocol : Protocol
 //         }
 //     }
 //
-//     async ValueTask WriteInternalAsync<T>(T message, CancellationToken cancellationToken = default) where T : IFrontendMessage
-//     {
-//         _flushControl.Initialize();
-//         try
-//         {
-//             await WriteMessageUnsynchronized(_defaultMessageWriter, message, cancellationToken).ConfigureAwait(false);
-//             if (_flushControl.WriterCompleted)
-//                 MoveToComplete();
-//             else
-//                 await _defaultMessageWriter.FlushAsync(observeFlushThreshold: false, cancellationToken).ConfigureAwait(false);
-//         }
-//         catch (Exception ex) when (!IsTimeoutOrCallerOCE(ex, cancellationToken))
-//         {
-//             MoveToComplete(ex);
-//             throw;
-//         }
-//         finally
-//         {
-//             if (!IsCompleted)
-//             {
-//                 _defaultMessageWriter.Reset();
-//                 _flushControl.Reset();
-//             }
-//         }
-//     }
+     async ValueTask WriteInternalAsync<T>(T message, CancellationToken cancellationToken = default) where T : IFrontendMessage
+     {
+         _flushControl.Initialize();
+         try
+         {
+             await new BatchWriter(this).WriteMessageAsync(message, cancellationToken).ConfigureAwait(false);
+             if (_flushControl.WriterCompleted)
+                 MoveToComplete();
+             else
+                 await _flushControl.FlushAsync(observeFlushThreshold: false, cancellationToken);
+         }
+         catch (Exception ex) when (!IsTimeoutOrCallerOCE(ex, cancellationToken))
+         {
+             MoveToComplete(ex);
+             throw;
+         }
+         finally
+         {
+             if (!IsCompleted)
+             {
+                 _flushControl.Reset();
+             }
+         }
+     }
 //
-//     // Throws inlined as this won't be inlined and it's an uncommonly called method.
-//     public static ValueTask<Tds33Protocol> StartAsync(PipeWriter writer, PipeReader reader, SqlServerOptions options, Tds33ProtocolOptions? protocolOptions = null)
-//     {
-//         var conn = new Tds33Protocol(writer, reader, options.Encoding, protocolOptions);
-//         return StartAsyncCore(conn, options);
-//
-//         static async ValueTask<Tds33Protocol> StartAsyncCore(Tds33Protocol conn, PgOptions options)
-//         {
-//             try
-//             {
-//                 await conn.WriteInternalAsync(new Startup(options)).ConfigureAwait(false);
-//                 using var msg = await conn.ReadMessageAsync<AuthenticationRequest>().ConfigureAwait(false);
-//                 switch (msg.AuthenticationType)
-//                 {
-//                     case AuthenticationType.Ok:
-//                         await conn.ReadMessageAsync<StartupResponses>().ConfigureAwait(false);
-//                         break;
-//                     case AuthenticationType.MD5Password:
-//                         if (options.Password is null)
-//                             throw new InvalidOperationException("No password given, connection expects password.");
-//                         await conn.WriteInternalAsync(new PasswordMessage(options.Username, options.Password, msg.MD5Salt)).ConfigureAwait(false);
-//                         var expectOk = await conn.ReadMessageAsync(new AuthenticationRequest()).ConfigureAwait(false);
-//                         if (expectOk.AuthenticationType != AuthenticationType.Ok)
-//                             throw new Exception("Unexpected authentication response");
-//                         await conn.ReadMessageAsync<StartupResponses>().ConfigureAwait(false);
-//                         break;
-//                     case AuthenticationType.CleartextPassword:
-//                     default:
-//                         throw new Exception();
-//                 }
-//
-//                 // Safe to change outside lock, we haven't exposed the instance yet.
-//                 conn._state = ProtocolState.Ready;
-//                 return conn;
-//             }
-//             catch (Exception)
-//             {
-//                 await conn.CompleteAsync();
-//                 throw;
-//             }
-//         }
-//     }
-//
+     // Throws inlined as this won't be inlined and it's an uncommonly called method.
+     public static async ValueTask<Tds33Protocol> StartAsync(PipeWriter writer, Stream readStream, SqlServerOptions options, Tds33ProtocolOptions? protocolOptions = null)
+     {
+         var conn = new Tds33Protocol(writer, readStream, options.Encoding, protocolOptions);
+         try
+         {
+             await conn.WriteInternalAsync(new PreloginMessage()).ConfigureAwait(false);
+             await conn.WriteInternalAsync(new Login7Message(options.Username, options.Password, options.Database, new byte[6])).ConfigureAwait(false);
+             await conn._reader.ReadAtLeastAsync(35);
+             conn._reader.Advance(35);
+
+             var tokenReader = conn._tokenReader;
+             await tokenReader.ReadAndExpectAsync<EnvChangeToken>();
+             await tokenReader.ReadAndExpectAsync<InfoToken>();
+             await tokenReader.ReadAndExpectAsync<LoginAckToken>();
+             await tokenReader.ReadAndExpectAsync<EnvChangeToken>();
+             await tokenReader.ReadAndExpectAsync<DoneToken>();
+
+             // Safe to change outside lock, we haven't exposed the instance yet.
+             conn._state = ProtocolState.Ready;
+             return conn;
+         }
+         catch (Exception)
+         {
+             await conn.CompleteAsync();
+             throw;
+         }
+     }
+
 //     // TODO update.
 //     // Throws inlined as this won't be inlined and it's an uncommonly called method.
 //     public static Tds33Protocol Start<TWriter, TReader>(TWriter writer, TReader reader, PgOptions options, Tds33ProtocolOptions? pipeOptions = null)

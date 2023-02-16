@@ -1,4 +1,5 @@
 using System;
+using System.Buffers;
 using System.Collections.Generic;
 using System.Text;
 using Woodstar.Buffers;
@@ -21,7 +22,7 @@ enum PreLoginOptionToken : byte
     NonceOption = 0x07
 }
 
-class PreloginMessage
+class PreloginMessage : IFrontendMessage
 {
     readonly uint _version;
 
@@ -52,11 +53,12 @@ class PreloginMessage
         _options.Add(new(PreLoginOptionToken.Mars, offset, offset += sizeof(byte)));
     }
 
-    public PacketHeader Header => PacketHeader.CreateType(PacketType.PreLogin, MessageStatus.Normal);
+    public static PacketHeader MessageType => PacketHeader.CreateType(PacketType.PreLogin, MessageStatus.Normal);
 
     readonly List<Option> _options = new();
 
-    public void Write<TWriter>(StreamingWriter<TWriter> writer) where TWriter : IStreamingWriter<byte>
+    public bool CanWriteSynchronously => true;
+    public void Write<TWriter>(ref BufferWriter<TWriter> writer) where TWriter : IBufferWriter<byte>
     {
         var offsetStart = _options.Count * Option.ByteCount + 1;
         foreach (var option in _options)
@@ -96,5 +98,4 @@ class PreloginMessage
             }
         }
     }
-
 }
