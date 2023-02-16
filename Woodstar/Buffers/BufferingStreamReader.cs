@@ -74,8 +74,12 @@ struct BufferReader
         _count = count;
     }
 
+    public static BufferReader Empty => new(null!, Array.Empty<byte>(), 0, 0);
+
     public int Remaining => _count - _pos;
     public int Consumed => _pos - _start;
+
+    public ReadOnlySpan<byte> UnreadSpan => _buf.AsSpan(_pos);
 
     public void Advance(int length)
     {
@@ -107,6 +111,11 @@ struct BufferReader
     public bool TryReadLittleEndian(out ushort value)
     {
         var span = _buf.AsSpan(_pos);
+        if (span.Length < sizeof(ushort))
+        {
+            value = default;
+            return false;
+        }
         Advance(sizeof(ushort));
         return BinaryPrimitives.TryReadUInt16LittleEndian(span, out value);
     }
@@ -114,6 +123,11 @@ struct BufferReader
     public bool TryReadLittleEndian(out int value)
     {
         var span = _buf.AsSpan(_pos);
+        if (span.Length < sizeof(int))
+        {
+            value = default;
+            return false;
+        }
         Advance(sizeof(int));
         return BinaryPrimitives.TryReadInt32LittleEndian(span, out value);
     }
@@ -121,6 +135,11 @@ struct BufferReader
     public bool TryReadLittleEndian(out uint value)
     {
         var span = _buf.AsSpan(_pos);
+        if (span.Length < sizeof(uint))
+        {
+            value = default;
+            return false;
+        }
         Advance(sizeof(uint));
         return BinaryPrimitives.TryReadUInt32LittleEndian(span, out value);
     }
@@ -128,6 +147,11 @@ struct BufferReader
     public bool TryReadLittleEndian(out long value)
     {
         var span = _buf.AsSpan(_pos);
+        if (span.Length < sizeof(long))
+        {
+            value = default;
+            return false;
+        }
         Advance(sizeof(long));
         return BinaryPrimitives.TryReadInt64LittleEndian(span, out value);
     }
@@ -135,6 +159,11 @@ struct BufferReader
     public bool TryReadLittleEndian(out ulong value)
     {
         var span = _buf.AsSpan(_pos);
+        if (span.Length < sizeof(ulong))
+        {
+            value = default;
+            return false;
+        }
         Advance(sizeof(ulong));
         return BinaryPrimitives.TryReadUInt64LittleEndian(span, out value);
     }

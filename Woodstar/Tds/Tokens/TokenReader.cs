@@ -232,12 +232,11 @@ class TokenReader
                         case DataTypeCode.DATETIMEOFFSETNTYPE:
 
                         // UShortLen
-                        case DataTypeCode.BIGVARBINARYTYPE:
-                        case DataTypeCode.BIGVARCHARTYPE:
-                        case DataTypeCode.BIGBINARYTYPE:
                         case DataTypeCode.BIGCHARTYPE:
-                            throw new NotSupportedException();
-
+                        case DataTypeCode.BIGVARBINARYTYPE:
+                        case DataTypeCode.BIGBINARYTYPE:
+                            throw new NotImplementedException();
+                        case DataTypeCode.BIGVARCHARTYPE:
                         case DataTypeCode.NVARCHARTYPE:
                         {
                             const int nvarCharSize = (sizeof(ushort) * 3) + sizeof(byte);
@@ -296,6 +295,7 @@ class TokenReader
 
             case TokenType.ROW:
                 Current = new RowToken();
+                reader.Commit();
                 break;
 
             case TokenType.TVP_ROW:

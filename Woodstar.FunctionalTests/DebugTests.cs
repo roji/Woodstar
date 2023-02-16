@@ -64,7 +64,7 @@ public class DebugTests
         // writer.Commit();
         // dataStreamWriter.EndMessage();
 
-        var sqlBatch = new SqlBatchMessage(new AllHeaders(null, new TransactionDescriptorHeader(0, 1), null), "SELECT 1;");
+        var sqlBatch = new SqlBatchMessage(new AllHeaders(null, new TransactionDescriptorHeader(0, 1), null), "SELECT , 3;");
         output = dataStreamWriter.StartMessage(sqlBatch.Header.Type, sqlBatch.Header.Status);
         writer = new StreamingWriter<IStreamingWriter<byte>>(output);
         sqlBatch.Write(writer);
@@ -88,7 +88,12 @@ public class DebugTests
 
         await tokenReader.MoveNextAsync();
         await tokenReader.MoveNextAsync();
+        var metadata = tokenReader.Current;
         await tokenReader.MoveNextAsync();
+        var resultSetReader = tokenReader.GetRowReader(((ColumnMetadataToken)metadata).ColumnDatums);
+        var value = await resultSetReader.GetAsync<string>();
+        var value2 = await resultSetReader.GetAsync<int>();
+        await resultSetReader.MoveToNextRow();
         await tokenReader.MoveNextAsync();
     }
 }
