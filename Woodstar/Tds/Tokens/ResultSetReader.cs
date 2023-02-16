@@ -3,20 +3,20 @@ using System.Buffers;
 using System.Collections.Generic;
 using System.Diagnostics;
 using System.Threading.Tasks;
-using Woodstar.Pipelines;
+using Woodstar.Buffers;
 
 namespace Woodstar.Tds.Tokens;
 
 class ResultSetReader
 {
-    readonly SimplePipeReader _pipeReader;
+    readonly BufferingStreamReader _streamReader;
     List<ColumnData> _columnData = null!;
     private ReadOnlySequence<byte> _buf;
     readonly List<int> _columnStartPositions = new();
     int _currentColumn;
 
-    internal ResultSetReader(SimplePipeReader pipeReader)
-        => _pipeReader = pipeReader;
+    internal ResultSetReader(BufferingStreamReader streamReader)
+        => _streamReader = streamReader;
 
     internal void Initialize(List<ColumnData> columnData)
     {
@@ -54,29 +54,29 @@ class ResultSetReader
                 columnStartSlice = _buf.Slice(_columnStartPositions[^1]);
                 _currentColumn = _columnStartPositions.Count - 1;
             }
-
-            var totalLength =
-            while (_currentColumn < columnIndex)
-            {
-                var dataType = _columnData[_currentColumn].Type; 
-                switch (dataType.LengthKind)
-                {
-                    case DataTypeLengthKind.Fixed:
-                        _buf dataType.Length
-                        break;
-                    case DataTypeLengthKind.VariableByte:
-                        break;
-                    case DataTypeLengthKind.VariableUShort:
-                        break;
-                    case DataTypeLengthKind.VariableInt:
-                        break;
-                    case DataTypeLengthKind.PartiallyLengthPrefixed:
-                        break;
-                    case DataTypeLengthKind.Zero:
-                    default:
-                        throw new ArgumentOutOfRangeException();
-                }
-            }
+            //
+            // var totalLength =
+            // while (_currentColumn < columnIndex)
+            // {
+            //     var dataType = _columnData[_currentColumn].Type; 
+            //     switch (dataType.LengthKind)
+            //     {
+            //         case DataTypeLengthKind.Fixed:
+            //             _buf dataType.Length
+            //             break;
+            //         case DataTypeLengthKind.VariableByte:
+            //             break;
+            //         case DataTypeLengthKind.VariableUShort:
+            //             break;
+            //         case DataTypeLengthKind.VariableInt:
+            //             break;
+            //         case DataTypeLengthKind.PartiallyLengthPrefixed:
+            //             break;
+            //         case DataTypeLengthKind.Zero:
+            //         default:
+            //             throw new ArgumentOutOfRangeException();
+            //     }
+            // }
         }
 
         switch (_columnData[columnIndex].Type.Code)

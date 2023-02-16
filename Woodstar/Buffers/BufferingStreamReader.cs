@@ -1,7 +1,9 @@
 using System;
 using System.Buffers.Binary;
 using System.Diagnostics;
+using System.Diagnostics.CodeAnalysis;
 using System.IO;
+using System.Text;
 using System.Threading;
 using System.Threading.Tasks;
 
@@ -20,19 +22,20 @@ class BufferingStreamReader
         _buf = new byte[bufferSize];
     }
 
+    int Remaining => _count - _pos;
+
     public void Advance(int count)
     {
-        if (count <= _count - _pos || count > _count)
+        if (count > Remaining)
             throw new ArgumentOutOfRangeException(nameof(count));
 
         _pos += count;
-        _count -= count;
     }
 
     public ValueTask<BufferReader> ReadAtLeastAsync(int minimumSize, CancellationToken cancellationToken = default)
     {
-        if (minimumSize <= _count - _pos)
-            return new(new BufferReader(this, _buf, _pos, _count - _pos));
+        if (minimumSize <= Remaining)
+            return new(new BufferReader(this, _buf, _pos, _count));
 
         return Core(minimumSize, cancellationToken);
 
@@ -40,18 +43,18 @@ class BufferingStreamReader
         {
             if (minimumSize > _buf.Length)
                 throw new ArgumentOutOfRangeException(nameof(minimumSize));
-            Debug.Assert(minimumSize > _count);
+            Debug.Assert(minimumSize > Remaining);
 
-            if (minimumSize > _buf.Length - _pos - _count)
+            if (minimumSize > _buf.Length - Remaining)
             {
                 Array.Copy(_buf, _pos, _buf, 0, _count);
                 _pos = 0;
             }
 
             _count += await _stream.ReadAtLeastAsync(
-                _buf.AsMemory(_pos + _count), minimumSize - _count, throwOnEndOfStream: true, cancellationToken);
+                _buf.AsMemory(_count), minimumSize - Remaining, throwOnEndOfStream: true, cancellationToken);
 
-            return new BufferReader(this, _buf, _pos, _count - _pos);
+            return new BufferReader(this, _buf, _pos, _count);
         }
     }
 }
@@ -72,13 +75,19 @@ struct BufferReader
     }
 
     public int Remaining => _count - _pos;
+    public int Consumed => _pos - _start;
 
     public void Advance(int length)
-        => _pos += length;
+    {
+        if (Remaining < length)
+            throw new ArgumentOutOfRangeException();
+        _pos += length;
+    }
 
     public void Commit()
     {
-
+        _reader.Advance(Consumed);
+        _start = _pos;
     }
 
     public bool TryRead(out byte value)
@@ -128,6 +137,70 @@ struct BufferReader
         var span = _buf.AsSpan(_pos);
         Advance(sizeof(ulong));
         return BinaryPrimitives.TryReadUInt64LittleEndian(span, out value);
+    }
+
+    public bool TryReadBVarchar([NotNullWhen(true)] out string? value, [NotNullWhen(false)]out int? totalByteLength)
+    {
+        if (TryRead(out var len) && len < Remaining)
+        {
+            totalByteLength = null;
+            if (len > 0)
+            {
+                var sequence = _buf.AsSpan(_pos, 2 * len);
+                value = Encoding.Unicode.GetString(sequence);
+                Advance(2 * len);
+                return true;
+            }
+
+            value = "";
+            return true;
+        }
+
+        value = null;
+        totalByteLength = len + sizeof(ushort);
+        return false;
+    }
+
+    public bool TryReadUsVarchar([NotNullWhen(true)] out string? value, [NotNullWhen(false)]out int? totalByteLength)
+    {
+        if (TryReadLittleEndian(out ushort len) && len < Remaining)
+        {
+            totalByteLength = null;
+            if (len > 0)
+            {
+                var sequence = _buf.AsSpan(_pos, 2 * len);
+                value = Encoding.Unicode.GetString(sequence);
+                Advance(2 * len);
+                return true;
+            }
+
+            value = "";
+            return true;
+        }
+
+        value = null;
+        totalByteLength = len + sizeof(ushort);
+        return false;
+    }
+
+    public bool TryReadTo(Span<byte> destination)
+    {
+        if (TryCopyTo(destination))
+        {
+            Advance(destination.Length);
+            return true;
+        }
+
+        return false;
+    }
+
+    public bool TryCopyTo(Span<byte> destination)
+    {
+        if (Remaining < destination.Length)
+            return false;
+
+        _buf.AsSpan(_pos, Math.Min(destination.Length, Remaining)).CopyTo(destination);
+        return true;
     }
 }
 

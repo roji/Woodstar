@@ -64,7 +64,7 @@ public class DebugTests
         // writer.Commit();
         // dataStreamWriter.EndMessage();
 
-        var sqlBatch = new SqlBatchMessage(new AllHeaders(null, new TransactionDescriptorHeader(0, 1), null), "SELECT bla FROM data");
+        var sqlBatch = new SqlBatchMessage(new AllHeaders(null, new TransactionDescriptorHeader(0, 1), null), "SELECT 1;");
         output = dataStreamWriter.StartMessage(sqlBatch.Header.Type, sqlBatch.Header.Status);
         writer = new StreamingWriter<IStreamingWriter<byte>>(output);
         sqlBatch.Write(writer);
@@ -76,26 +76,19 @@ public class DebugTests
 
         var packetStream = new TdsPacketStream(connection.Stream);
         var streamReader = new BufferingStreamReader(packetStream);
-        await streamReader.ReadAtLeastAsync(43);
-        streamReader.Advance(43);
+        await streamReader.ReadAtLeastAsync(35);
+        streamReader.Advance(35);
 
+        var tokenReader = new TokenReader(streamReader);
+        await tokenReader.MoveNextAsync();
+        await tokenReader.MoveNextAsync();
+        await tokenReader.MoveNextAsync();
+        await tokenReader.MoveNextAsync();
+        await tokenReader.MoveNextAsync();
 
-
-
-
-        // var pipeReader = new SimplePipeReader(connection.Reader, Timeout.InfiniteTimeSpan);
-        // await pipeReader.ReadAtLeastAsync(43 + 8);
-        // pipeReader.Advance(43);
-        // var tokenReader = new TokenReader(pipeReader);
-        // await tokenReader.MoveNextAsync();
-        // await tokenReader.MoveNextAsync();
-        // await tokenReader.MoveNextAsync();
-        // await tokenReader.MoveNextAsync();
-        // await tokenReader.MoveNextAsync();
-        //
-        // await tokenReader.MoveNextAsync();
-        // await tokenReader.MoveNextAsync();
-        // await tokenReader.MoveNextAsync();
-        // await tokenReader.MoveNextAsync();
+        await tokenReader.MoveNextAsync();
+        await tokenReader.MoveNextAsync();
+        await tokenReader.MoveNextAsync();
+        await tokenReader.MoveNextAsync();
     }
 }

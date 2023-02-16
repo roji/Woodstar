@@ -19,32 +19,37 @@ public class TdsPacketStream : Stream
     public TdsPacketStream(Stream stream)
     {
         _stream = stream;
+        // TODO Should be based on packetsize.
+        _buf = new byte[8192];
     }
 
     public override async ValueTask<int> ReadAsync(Memory<byte> buffer, CancellationToken cancellationToken = default)
     {
         var zeroByteRead = buffer.Length == 0;
         var totalCopied = 0;
+        var didRead = false;
 
         while (true)
         {
             var copied = Math.Min(buffer.Length, Math.Min(_packetRemaining, _count - _pos));
             _buf.AsMemory(_pos, copied).CopyTo(buffer);
             _pos += copied;
-            _count -= copied;
             _packetRemaining -= copied;
             totalCopied += copied;
 
             if (copied == buffer.Length && !zeroByteRead)
                 return totalCopied;
 
-            buffer = buffer.Slice(0, copied);
+            buffer = buffer.Slice(copied);
 
-            if (_count == 0)
+            if (_count == _pos)
             {
+                if (didRead)
+                    return totalCopied;
+
                 _pos = 0;
                 _count = await _stream.ReadAsync(_buf, 0, _buf.Length, cancellationToken);
-
+                didRead = true;
                 if (!zeroByteRead)
                     continue;
                 return 0;
@@ -71,7 +76,6 @@ public class TdsPacketStream : Stream
 
             _packetRemaining = header.PacketSize - PacketHeader.ByteCount;
             _pos += PacketHeader.ByteCount;
-            _count -= PacketHeader.ByteCount;
 
             if (zeroByteRead && _count > 0)
                 return 0;
