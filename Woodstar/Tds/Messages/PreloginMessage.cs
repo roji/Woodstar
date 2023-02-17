@@ -53,7 +53,7 @@ class PreloginMessage : IFrontendMessage
         _options.Add(new(PreLoginOptionToken.Mars, offset, offset += sizeof(byte)));
     }
 
-    public static PacketHeader MessageType => PacketHeader.CreateType(PacketType.PreLogin, MessageStatus.Normal);
+    public static TdsPacketHeader MessageType => TdsPacketHeader.CreateType(TdsPacketType.PreLogin, MessageStatus.Normal);
 
     readonly List<Option> _options = new();
 

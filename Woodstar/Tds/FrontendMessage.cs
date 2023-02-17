@@ -18,7 +18,7 @@ static class FrontendMessage
 
         public BufferedMessage(ICopyableBuffer<byte> buffer) => _buffer = buffer;
 
-        public static PacketHeader MessageType => throw new NotImplementedException();
+        public static TdsPacketHeader MessageType => throw new NotImplementedException();
         public bool CanWriteSynchronously => true;
         public void Write<T>(ref BufferWriter<T> buffer) where T : IBufferWriter<byte>
             => _buffer.CopyTo(buffer.Output);
@@ -30,26 +30,22 @@ static class FrontendMessage
 
         public StreamingMessage(Stream stream) => _stream = stream;
 
-        public static PacketHeader MessageType => throw new NotImplementedException();
+        public static TdsPacketHeader MessageType => throw new NotImplementedException();
         public bool CanWriteSynchronously => false;
-        public async ValueTask<FlushResult> WriteAsync<T>(MessageWriter<T> writer, CancellationToken cancellationToken = default) where T : IStreamingWriter<byte>
+        public async ValueTask WriteAsync<T>(StreamingWriter<T> writer, CancellationToken cancellationToken = default) where T : IStreamingWriter<byte>
         {
             var read = 0;
-            var flushResult = default(FlushResult);
             do
             {
                 if (read > 7 * 1024)
-                    writer.Writer.Ensure(8 * 1024);
-                read = await _stream.ReadAsync(writer.Writer.Memory, cancellationToken).ConfigureAwait(false);
-                writer.Writer.Advance(read);
-                if (read > writer.AdvisoryFlushThreshold)
-                    flushResult = await writer.FlushAsync(cancellationToken).ConfigureAwait(false);
+                    writer.Ensure(8 * 1024);
+                read = await _stream.ReadAsync(writer.Memory, cancellationToken).ConfigureAwait(false);
+                writer.Advance(read);
+                await writer.FlushAsync(cancellationToken).ConfigureAwait(false);
             } while (read != 0);
 
-            if (writer.BytesPending != 0)
-                flushResult = await writer.FlushAsync(cancellationToken).ConfigureAwait(false);
-
-            return flushResult;
+            if (writer.BytesCommitted != 0)
+                await writer.FlushAsync(cancellationToken).ConfigureAwait(false);
         }
     }
 
@@ -66,7 +62,7 @@ interface IFrontendHeader<THeader> where THeader: struct, IFrontendHeader<THeade
 
 interface IFrontendMessage
 {
-    static abstract PacketHeader MessageType { get; }
+    static abstract TdsPacketHeader MessageType { get; }
 
     bool CanWriteSynchronously { get; }
 

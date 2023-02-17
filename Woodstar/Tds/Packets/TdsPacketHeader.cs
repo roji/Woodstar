@@ -1,10 +1,8 @@
 using System;
-using System.Buffers;
 using System.Buffers.Binary;
 using System.Diagnostics;
 using System.Runtime.CompilerServices;
 using System.Runtime.InteropServices;
-using Woodstar.Buffers;
 
 namespace Woodstar.Tds.Packets;
 
@@ -13,7 +11,7 @@ static class TdsPackets
     public static readonly bool DebugEnabled = false;
 }
 
-enum PacketType : byte
+enum TdsPacketType : byte
 {
     SQLBatch = 1,
     RPC = 3,
@@ -53,14 +51,14 @@ enum MessageStatus : byte
     ResetConnectionSkipTransaction = 16,
 }
 
-readonly record struct PacketHeader
+readonly record struct TdsPacketHeader
 {
     public const byte ByteCount =
-        sizeof(PacketType) + sizeof(MessageStatus) +
+        sizeof(TdsPacketType) + sizeof(MessageStatus) +
         sizeof(ushort) + sizeof(ushort) +
         sizeof(byte) + sizeof(byte);
 
-    readonly PacketType _type;
+    readonly TdsPacketType _type;
     readonly MessageStatus _status;
     readonly short _packetSize; // As max is 2^15.
     readonly ushort _spId; // optional two byte big endian.
@@ -69,7 +67,7 @@ readonly record struct PacketHeader
     readonly byte _packetId;
     // readonly byte _window;
 
-    PacketHeader(PacketType type, MessageStatus status, short packetSize, byte packetId, ushort spId = default)
+    TdsPacketHeader(TdsPacketType type, MessageStatus status, short packetSize, byte packetId, ushort spId = default)
     {
         if (TdsPackets.DebugEnabled)
         {
@@ -87,7 +85,7 @@ readonly record struct PacketHeader
         _spId = spId;
     }
 
-    public PacketType Type => _type;
+    public TdsPacketType Type => _type;
     public MessageStatus Status => _status;
     public short PacketSize => _packetSize;
     public byte PacketId => _packetId;
@@ -102,9 +100,9 @@ readonly record struct PacketHeader
         buffer[6] = _packetId;
     }
 
-    public bool TypeEquals(PacketHeader other) => other._type == _type;
+    public bool TypeEquals(TdsPacketHeader other) => other._type == _type;
 
-    public static bool TryParse(ReadOnlySpan<byte> span, out PacketHeader header)
+    public static bool TryParse(ReadOnlySpan<byte> span, out TdsPacketHeader header)
     {
         if (span.Length < ByteCount)
         {
@@ -113,7 +111,7 @@ readonly record struct PacketHeader
         }
 
         ref var head = ref MemoryMarshal.GetReference(span);
-        var type = (PacketType)head;
+        var type = (TdsPacketType)head;
 
         if (TdsPackets.DebugEnabled && !Enum.IsDefined(type))
             ThrowNotDefined(type);
@@ -132,40 +130,16 @@ readonly record struct PacketHeader
 
         var id = Unsafe.Add(ref head, 6);
 
-        header = new PacketHeader(type, status, length, id, spId: spId);
+        header = new TdsPacketHeader(type, status, length, id, spId: spId);
         Debug.Assert(header.PacketSize >= ByteCount);
         return true;
 
-        static void ThrowNotDefined(PacketType type) => throw new ArgumentOutOfRangeException(nameof(type), type, "Unknown packet type");
+        static void ThrowNotDefined(TdsPacketType type) => throw new ArgumentOutOfRangeException(nameof(type), type, "Unknown packet type");
         static void ThrowNotDefinedStatus(MessageStatus status) => throw new ArgumentOutOfRangeException(nameof(status), status, "Unknown packet status");
     }
 
-    public static bool TryParse(in ReadOnlySequence<byte> buffer, out PacketHeader header)
-    {
-        Span<byte> span = stackalloc byte[ByteCount];
-        if (!TryParse(buffer.GetFirstSpan(), out header) && (!ReadOnlySequenceExtensions.TryCopySlow(buffer, span) || !TryParse(span, out header)))
-        {
-            header = default;
-            return false;
-        }
-
-        return true;
-    }
-
-    public bool TryParse(ReadOnlySpan<byte> unreadSpan, in ReadOnlySequence<byte> buffer, long bufferStart, out PacketHeader header)
-    {
-        Span<byte> span = stackalloc byte[ByteCount];
-        if (!TryParse(unreadSpan, out header) && (!ReadOnlySequenceExtensions.TryCopySlow(buffer.Slice(buffer.GetPosition(bufferStart)), span) || !TryParse(span, out header)))
-        {
-            header = default;
-            return false;
-        }
-
-        return true;
-    }
-
-    public static PacketHeader CreateType(PacketType type, MessageStatus status)
+    public static TdsPacketHeader CreateType(TdsPacketType type, MessageStatus status)
         => new(type, status, 0, 0);
-    public static PacketHeader Create(PacketType type, MessageStatus status, short length, byte id)
+    public static TdsPacketHeader Create(TdsPacketType type, MessageStatus status, short length, byte id)
         => new(type, status, length, id);
 }

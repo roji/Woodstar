@@ -3,9 +3,8 @@ using System.Diagnostics;
 using System.IO;
 using System.Threading;
 using System.Threading.Tasks;
-using Woodstar.Tds.Packets;
 
-namespace Woodstar.Tds;
+namespace Woodstar.Tds.Packets;
 
 /// <summary>
 /// A read-only stream that gets rid of the TDS packet layer.
@@ -63,7 +62,7 @@ public class TdsPacketStream : Stream
             Debug.Assert(_packetRemaining == 0);
 
             // We're now at the start of a new packet. Make sure we have a full header buffered.
-            while (Remaining < PacketHeader.ByteCount)
+            while (Remaining < TdsPacketHeader.ByteCount)
             {
                 Array.Copy(_buf, _pos, _buf, 0, Remaining);
                 _count = Remaining;
@@ -74,13 +73,13 @@ public class TdsPacketStream : Stream
                     return totalCopied;
             }
 
-            Debug.Assert(Remaining >= PacketHeader.ByteCount);
+            Debug.Assert(Remaining >= TdsPacketHeader.ByteCount);
 
-            if (!PacketHeader.TryParse(_buf.AsSpan(_pos), out var header))
+            if (!TdsPacketHeader.TryParse(_buf.AsSpan(_pos), out var header))
                 throw new InvalidOperationException("Couldn't parse TDS packet header");
 
-            _packetRemaining = header.PacketSize - PacketHeader.ByteCount;
-            _pos += PacketHeader.ByteCount;
+            _packetRemaining = header.PacketSize - TdsPacketHeader.ByteCount;
+            _pos += TdsPacketHeader.ByteCount;
 
             if (zeroByteRead && _count > 0)
                 return 0;

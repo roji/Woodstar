@@ -12,10 +12,9 @@ struct ParameterContextBuilder
     int _index;
     ParameterContextFlags _flags;
 
-    public ParameterContextBuilder(int length, int revision, SqlServerConverterOptions converterOptions)
+    public ParameterContextBuilder(int length, int revision)
     {
         _length = length;
-        ConverterOptions = converterOptions;
         _flags = ParameterContextFlags.None;
         NullStructValueIsDbNull = true;
         Revision = revision;
@@ -23,7 +22,6 @@ struct ParameterContextBuilder
 
     public int Length => _length;
     public int Count => _index;
-    public SqlServerConverterOptions ConverterOptions { get; }
 
     /// This property controls what should happen when a null value is passed for a non nullable struct type.
     /// This can happen if the boxed value is accompanied by a type id that resolves to a data type for a
@@ -63,24 +61,26 @@ struct ParameterContextBuilder
         var parameterKind = ParameterKind.Input;
         var isSession = false;
         Parameter parameter;
-        if (value is IParameterSession session)
-        {
-            parameter = ConverterOptions.CreateParameter(value, typeId, NullStructValueIsDbNull);
-            parameterKind = session.Kind;
-            isSession = true;
-        }
-        else
-        {
-            parameter = ConverterOptions.CreateParameter(value, typeId, NullStructValueIsDbNull);
-        }
+        // if (value is IParameterSession session)
+        // {
+        //     parameter = ConverterOptions.CreateParameter(value, typeId, NullStructValueIsDbNull);
+        //     parameterKind = session.Kind;
+        //     isSession = true;
+        // }
+        // else
+        // {
+        //     parameter = ConverterOptions.CreateParameter(value, typeId, NullStructValueIsDbNull);
+        // }
+        //
+        // if (parameter.Size is { Value: null })
+        //     _flags |= ParameterContextFlags.AnyUnknownByteCount;
+        //
+        // if (isSession)
+        //     _flags |= parameterKind is not ParameterKind.Input ? ParameterContextFlags.AnySessions : ParameterContextFlags.AnySessions | ParameterContextFlags.AnyWritableParamSessions;
+        //
+        // return Parameters[_index++] = parameter;
 
-        if (parameter.Size is { Value: null })
-            _flags |= ParameterContextFlags.AnyUnknownByteCount;
-
-        if (isSession)
-            _flags |= parameterKind is not ParameterKind.Input ? ParameterContextFlags.AnySessions : ParameterContextFlags.AnySessions | ParameterContextFlags.AnyWritableParamSessions;
-
-        return Parameters[_index++] = parameter;
+        throw new NotImplementedException();
     }
 
     public ParameterContext Build()

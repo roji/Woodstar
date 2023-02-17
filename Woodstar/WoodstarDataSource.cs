@@ -316,12 +316,7 @@ public partial class WoodstarDataSource: DbDataSource, IConnectionFactory<TdsPro
                 ? _databaseInfoProvider.Get(_sqlServerOptions, timeout)
                 : await _databaseInfoProvider.GetAsync(_sqlServerOptions, cancellationToken);
 
-            var converterOptions = new SqlServerConverterOptions
-            {
-                TextEncoding = Encoding.UTF8,
-            };
-
-            return new DbDependencies(databaseInfo, converterOptions, DbDepsRevision++);
+            return new DbDependencies(databaseInfo, DbDepsRevision++);
         }
 
     }
@@ -411,23 +406,21 @@ public partial class WoodstarDataSource: DbDataSource, IConnectionFactory<TdsPro
     // Internal for testing.
     internal class DbDependencies
     {
-        public DbDependencies(SqlServerDatabaseInfo databaseInfo, SqlServerConverterOptions converterOptions, int revision)
+        public DbDependencies(SqlServerDatabaseInfo databaseInfo, int revision)
         {
             DatabaseInfo = databaseInfo;
-            ConverterOptions = converterOptions;
-            CommandWriter = new(databaseInfo, converterOptions.TextEncoding);
+            CommandWriter = new(databaseInfo, Encoding.Unicode);
             Revision = revision;
             ParameterContextBuilderFactory = GetParameterContextBuilder;
         }
 
         public SqlServerDatabaseInfo DatabaseInfo { get; }
-        public SqlServerConverterOptions ConverterOptions { get; }
         public TdsCommandWriter CommandWriter { get; }
         public int Revision { get; }
 
         public ParameterContextBuilderFactory ParameterContextBuilderFactory { get; }
 
         ParameterContextBuilder GetParameterContextBuilder(int length)
-            => new(length, Revision, ConverterOptions);
+            => new(length, Revision);
     }
 }

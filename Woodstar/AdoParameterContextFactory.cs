@@ -83,7 +83,7 @@ readonly struct AdoParameterContextFactory
                 cacheItem.DbType = dbParameter.WoodstarDbType;
             else
             {
-                cacheItem.DbType = new WoodstarDbType(parameter.TypeId.ToDataTypeName());
+                cacheItem.DbType = new WoodstarDbType("");
                 dbParameter.SetInferredDbType(cacheItem.DbType, parameter.IsValueDependent);
             }
         }

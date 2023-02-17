@@ -6,7 +6,7 @@ using Woodstar.Buffers;
 
 namespace Woodstar.Tds.Packets;
 
-sealed class DataStreamWriter: IStreamingWriter<byte>
+sealed class TdsPacketWriter: IStreamingWriter<byte>
 {
     // This is the size given by the Login7 response and must be respected.
     readonly short _packetSize;
@@ -19,10 +19,10 @@ sealed class DataStreamWriter: IStreamingWriter<byte>
     byte[]? _scratchBuffer;
     bool _scratchBufferActive;
     byte _packetId;
-    PacketType _packetType;
+    TdsPacketType _tdsPacketType;
     MessageStatus _messageStatus;
 
-    public DataStreamWriter(IStreamingWriter<byte> writer, short packetSize)
+    public TdsPacketWriter(IStreamingWriter<byte> writer, short packetSize)
     {
         _writer = writer;
         _packetSize = packetSize;
@@ -30,7 +30,7 @@ sealed class DataStreamWriter: IStreamingWriter<byte>
         _messageCompleted = true;
     }
 
-    short MaxPayloadSize => (short)(_packetSize - PacketHeader.ByteCount);
+    short MaxPayloadSize => (short)(_packetSize - TdsPacketHeader.ByteCount);
     int ScratchBufferSize => (int)(MaxPayloadSize * 1.10); // We add 10% to be sure we can easily handle a full packet + some spillage.
 
     byte[] EnsureScratchBuffer()
@@ -53,7 +53,7 @@ sealed class DataStreamWriter: IStreamingWriter<byte>
             throw new InvalidOperationException("No message was started.");
     }
 
-    public IStreamingWriter<byte> StartMessage(PacketType type, MessageStatus status)
+    public IStreamingWriter<byte> StartMessage(TdsPacketType type, MessageStatus status)
     {
         if (!_messageCompleted)
             throw new InvalidOperationException("Previous message was not completed yet.");
@@ -61,14 +61,14 @@ sealed class DataStreamWriter: IStreamingWriter<byte>
             throw new ArgumentException($"Invalid to specify {nameof(MessageStatus.EndOfMessage)}, this is handled by the message writer.");
 
         _messageCompleted = false;
-        _packetType = type;
+        _tdsPacketType = type;
         _messageStatus = status;
         return this;
     }
 
     void ResetMessage()
     {
-        _packetType = default;
+        _tdsPacketType = default;
         _messageStatus = default;
         _messageCompleted = true;
         if (_scratchBufferCount > 0)
@@ -99,12 +99,12 @@ sealed class DataStreamWriter: IStreamingWriter<byte>
                 return;
 
             data = _writer.GetSpan(count);
-            _scratchBuffer.AsSpan(0, count).CopyTo(data.Slice(PacketHeader.ByteCount));
+            _scratchBuffer.AsSpan(0, count).CopyTo(data.Slice(TdsPacketHeader.ByteCount));
         }
         else
             data = _activeBuffer.Span;
 
-        var packetType = _packetType;
+        var packetType = _tdsPacketType;
         var messageStatus = _messageStatus;
         if (endMessage)
             ResetMessage();
@@ -124,30 +124,30 @@ sealed class DataStreamWriter: IStreamingWriter<byte>
         {
             var remainingPackets = packetCount - 1 - processedPackets;
             // If it's the first packet we take data as the start directly.
-            var packetStartSpan = remainingPackets is not 0 ? data.Slice(PacketHeader.ByteCount + remainingPackets * maxPayloadSize) : data;
+            var packetStartSpan = remainingPackets is not 0 ? data.Slice(TdsPacketHeader.ByteCount + remainingPackets * maxPayloadSize) : data;
             var actualPayloadSize = processedPackets is 0 && remainderPayloadSize is not 0 ? remainderPayloadSize : maxPayloadSize;
 
             // This will be a continued packet, we must store its contents and return it or copy it to the next buffer in GetMemory/Span, depending on sizeHint.
             if (processedPackets is 0 && remainderPayloadSize is not 0 && !endMessage)
             {
                 // First packet should skip its prepended header space.
-                packetStartSpan.Slice(remainingPackets is 0 ? PacketHeader.ByteCount : 0, remainderPayloadSize).CopyTo(EnsureScratchBuffer());
+                packetStartSpan.Slice(remainingPackets is 0 ? TdsPacketHeader.ByteCount : 0, remainderPayloadSize).CopyTo(EnsureScratchBuffer());
                 _scratchBufferCount = remainderPayloadSize;
             }
             else
             {
-                var actualPacketSize = (short)(actualPayloadSize + PacketHeader.ByteCount);
+                var actualPacketSize = (short)(actualPayloadSize + TdsPacketHeader.ByteCount);
                 // If it's the first packet we have prepended header space so we can skip the data shift work.
                 // Otherwise bound to the payload size and shift it by the remaining amount of headers which were reserved at the end.
                 if (remainingPackets is not 0)
                 {
-                    var newDataStart = PacketHeader.ByteCount * remainingPackets;
+                    var newDataStart = TdsPacketHeader.ByteCount * remainingPackets;
                     packetStartSpan.Slice(0, actualPayloadSize).CopyTo(packetStartSpan.Slice(newDataStart));
-                    packetStartSpan = packetStartSpan.Slice(newDataStart - PacketHeader.ByteCount);
+                    packetStartSpan = packetStartSpan.Slice(newDataStart - TdsPacketHeader.ByteCount);
                 }
 
                 var status = processedPackets is 0 && endMessage ? messageStatus | MessageStatus.EndOfMessage : messageStatus;
-                PacketHeader.Create(packetType, status, actualPacketSize, packetId).Write(packetStartSpan);
+                TdsPacketHeader.Create(packetType, status, actualPacketSize, packetId).Write(packetStartSpan);
                 actualBytes += actualPacketSize;
                 packetId--;
             }
@@ -174,18 +174,18 @@ sealed class DataStreamWriter: IStreamingWriter<byte>
         _scratchBufferActive = false;
         sizeHint += scratchBufferCount;
         var packetCount = GetPacketCount(sizeHint);
-        var sizeOfHeaders = packetCount * PacketHeader.ByteCount;
+        var sizeOfHeaders = packetCount * TdsPacketHeader.ByteCount;
         var mem = _activeBuffer = _writer.GetMemory(sizeHint + sizeOfHeaders);
         packetCount = GetPacketCount(mem.Length);
 
         // If we couldn't use our buffer we must copy it into the requested buffer.
         if (scratchBufferCount > 0)
-            _scratchBuffer.AsMemory(0, scratchBufferCount).CopyTo(mem.Slice(PacketHeader.ByteCount));
+            _scratchBuffer.AsMemory(0, scratchBufferCount).CopyTo(mem.Slice(TdsPacketHeader.ByteCount));
 
         // We'll leave empty space for one header at the start of the buffer as this speeds up simple single packet cases given there is no need to shift data.
         // We'll cut off the rest of the potential headers from the end to reserve enough space for any buffer advance by the user.
         // During advance we'll copy it all into the right places before advancing the underlying writer.
-        return mem.Slice(PacketHeader.ByteCount + scratchBufferCount, mem.Length - scratchBufferCount - PacketHeader.ByteCount * packetCount);
+        return mem.Slice(TdsPacketHeader.ByteCount + scratchBufferCount, mem.Length - scratchBufferCount - TdsPacketHeader.ByteCount * packetCount);
     }
 
     public Span<byte> GetSpan(int sizeHint = 0) => GetMemory(sizeHint).Span;

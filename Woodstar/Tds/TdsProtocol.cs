@@ -43,8 +43,8 @@ class TdsProtocol : Protocol
     readonly TdsOperationSource _operationSourceSingleton;
     readonly TdsOperationSource _exclusiveOperationSourceSingleton;
 
-    readonly ResettableStreamingWriter<DataStreamWriter> _streamingWriter;
-    readonly DataStreamWriter _dataStreamWriter;
+    readonly ResettableStreamingWriter<TdsPacketWriter> _streamingWriter;
+    readonly TdsPacketWriter _tdsPacketWriter;
     readonly TokenReader _tokenReader;
 
     // The pool exists as there is a timeframe between a reader completing (and its slot) and the owner resetting the reader.
@@ -61,10 +61,10 @@ class TdsProtocol : Protocol
     {
         _protocolOptions = protocolOptions ?? DefaultProtocolOptions;
         _pipeWriter = writer;
-        _flushControl = new ResettableFlushControl(writer, _protocolOptions.WriteTimeout, Math.Max(MessageWriter.DefaultAdvisoryFlushThreshold , _protocolOptions.FlushThreshold));
+        _flushControl = new ResettableFlushControl(writer, _protocolOptions.WriteTimeout, Math.Max(1500 , _protocolOptions.FlushThreshold));
         var pipeStreamingWriter = new PipeStreamingWriter(_pipeWriter);
-        _dataStreamWriter = new DataStreamWriter(pipeStreamingWriter, 4096);
-        _streamingWriter = new ResettableStreamingWriter<DataStreamWriter>(_dataStreamWriter);
+        _tdsPacketWriter = new TdsPacketWriter(pipeStreamingWriter, 4096);
+        _streamingWriter = new ResettableStreamingWriter<TdsPacketWriter>(_tdsPacketWriter);
         _reader = new BufferingStreamReader(new TdsPacketStream(stream));
         _tokenReader = new TokenReader(_reader);
         _operations = new Queue<TdsOperationSource>();
@@ -168,7 +168,7 @@ class TdsProtocol : Protocol
 
         public ValueTask WriteMessageAsync<T>(T message, CancellationToken cancellationToken = default) where T : IFrontendMessage
         {
-            var dataStreamWriter = _instance._dataStreamWriter;
+            var dataStreamWriter = _instance._tdsPacketWriter;
             var streamingWriter = _instance._streamingWriter;
             if (message.CanWriteSynchronously)
             {
@@ -176,7 +176,7 @@ class TdsProtocol : Protocol
                 {
                     var messageType = T.MessageType;
                     dataStreamWriter.StartMessage(messageType.Type, messageType.Status);
-                    var buffer = new BufferWriter<DataStreamWriter>(dataStreamWriter);
+                    var buffer = new BufferWriter<TdsPacketWriter>(dataStreamWriter);
                     message.Write(ref buffer);
                     Debug.Assert(buffer.BufferedBytes > 0, "Message writer should not flush all data as this may prevent packet end of message finalization.");
                     dataStreamWriter.Advance(buffer.BufferedBytes, endMessage: true);
@@ -190,7 +190,7 @@ class TdsProtocol : Protocol
 
             return WriteAsync(dataStreamWriter, streamingWriter, message, cancellationToken);
 
-            static async ValueTask WriteAsync(DataStreamWriter dataStreamWriter, ResettableStreamingWriter<DataStreamWriter> streamingWriter, T message, CancellationToken cancellationToken = default)
+            static async ValueTask WriteAsync(TdsPacketWriter dataStreamWriter, ResettableStreamingWriter<TdsPacketWriter> streamingWriter, T message, CancellationToken cancellationToken = default)
             {
                 try
                 {
@@ -279,21 +279,21 @@ class TdsProtocol : Protocol
     }
 
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
-    static ValueTask WriteMessageUnsynchronized<TWriter, T>(DataStreamWriter dataStreamWriter, StreamingWriter<TWriter> streamingWriter, T message, CancellationToken cancellationToken = default)
+    static ValueTask WriteMessageUnsynchronized<TWriter, T>(TdsPacketWriter tdsPacketWriter, StreamingWriter<TWriter> streamingWriter, T message, CancellationToken cancellationToken = default)
         where TWriter : IStreamingWriter<byte> where T : IFrontendMessage
     {
         if (message.CanWriteSynchronously)
         {
-            var buffer = new BufferWriter<DataStreamWriter>(dataStreamWriter);
+            var buffer = new BufferWriter<TdsPacketWriter>(tdsPacketWriter);
             message.Write(ref buffer);
             Debug.Assert(buffer.BufferedBytes > 0, "Message writer should not flush all data as this may prevent packet end of message finalization.");
-            dataStreamWriter.Advance(buffer.BufferedBytes, endMessage: true);
+            tdsPacketWriter.Advance(buffer.BufferedBytes, endMessage: true);
             return new ValueTask();
         }
 
-        return WriteAsync(dataStreamWriter, streamingWriter, message, cancellationToken);
+        return WriteAsync(tdsPacketWriter, streamingWriter, message, cancellationToken);
 
-        static async ValueTask WriteAsync(DataStreamWriter dataStreamWriter, StreamingWriter<TWriter> streamingWriter, T message, CancellationToken cancellationToken = default)
+        static async ValueTask WriteAsync(TdsPacketWriter dataStreamWriter, StreamingWriter<TWriter> streamingWriter, T message, CancellationToken cancellationToken = default)
         {
             await message.WriteAsync(streamingWriter, cancellationToken);
             Debug.Assert(streamingWriter.BufferedBytes > 0, "Message writer should not flush all data as this may prevent packet end of message finalization.");

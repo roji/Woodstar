@@ -11,7 +11,7 @@ namespace Woodstar.Buffers;
 
 class BufferingStreamReader
 {
-    Stream _stream;
+    readonly Stream _stream;
     readonly byte[] _buf;
     int _pos;
     int _count;

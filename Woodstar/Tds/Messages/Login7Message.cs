@@ -100,7 +100,7 @@ class Login7Message : IFrontendMessage
                     + (_attachDbFile?.Length ?? 0) + (_changePassword?.Length ?? 0)));
     }
 
-    public static PacketHeader MessageType => PacketHeader.CreateType(PacketType.TDS7Login, MessageStatus.Normal);
+    public static TdsPacketHeader MessageType => TdsPacketHeader.CreateType(TdsPacketType.TDS7Login, MessageStatus.Normal);
 
     public bool CanWriteSynchronously => true;
     public void Write<TWriter>(ref BufferWriter<TWriter> writer) where TWriter : IBufferWriter<byte>
