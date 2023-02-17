@@ -1,9 +1,15 @@
-﻿using Microsoft.Data.SqlClient;
+﻿using System.Diagnostics;
+using System.Net;
+using System.Text;
+using Microsoft.Data.SqlClient;
 using Woodstar.Buffers;
 using Woodstar.Pipelines;
+using Woodstar.SqlServer;
 using Woodstar.Tds;
 using Woodstar.Tds.Messages;
 using Woodstar.Tds.Packets;
+using Woodstar.Tds.SqlServer;
+using Woodstar.Tds.Tds33;
 using Woodstar.Tds.Tokens;
 using Xunit;
 
@@ -17,6 +23,46 @@ public class DebugTests
     public DebugTests(DatabaseService databaseService)
     {
         _databaseService = databaseService;
+    }
+
+    [Fact]
+    public async Task Multiplexing()
+    {
+        var dataSource = new WoodstarDataSource(new WoodstarDataSourceOptions
+        {
+            EndPoint = IPEndPoint.Parse(DatabaseService.EndPoint),
+            Username = DatabaseService.Username,
+            Password = DatabaseService.Password,
+            Database = DatabaseService.Database
+        }, new TdsProtocolOptions());
+
+        var cmd = new LowLevelSqlCommand();
+        var readerTasks = new Task[1000];
+        for (var i = 0; i < readerTasks.Length; i++)
+        {
+            readerTasks[i] = Execute(dataSource);
+        }
+
+        for (var i = 0; i < readerTasks.Length; i++)
+        {
+            await readerTasks[i];
+        }
+
+        async Task Execute(WoodstarDataSource dataSource)
+        {
+            var batch = await dataSource.WriteMultiplexingCommand(cmd);
+            var op = await batch.Single.GetOperation();
+            var reader = ((TdsProtocol)op.Protocol).Reader;
+            var execution = batch.Single.GetCommandExecution();
+            await reader.ReadAndExpectAsync<EnvChangeToken>();
+            var metadata = await reader.ReadAndExpectAsync<ColumnMetadataToken>();
+            var resultSetReader = await reader.GetResultSetReaderAsync(metadata.ColumnData);
+            var value = await resultSetReader.GetAsync<int>();
+            // var value2 = await resultSetReader.GetAsync<int>();
+            await resultSetReader.MoveToNextRow();
+            await reader.ReadAndExpectAsync<DoneToken>();
+            op.Complete();
+        }
     }
 
     [Fact]
@@ -34,8 +80,8 @@ public class DebugTests
         // //Warmup
         // for (int i = 0; i < 1000; i++)
         // {
-        using var cmd = new SqlCommand(command, conn);
-        await using var reader = await cmd.ExecuteReaderAsync();
+        // using var cmd = new LowLevelSqlCommand(command, conn);
+        // await using var reader = await cmd.ExecuteReaderAsync();
         //     while (await reader.ReadAsync())
         //     {
         //     }
@@ -46,54 +92,88 @@ public class DebugTests
     public async Task PreloginTest()
     {
         var connection = await _databaseService.OpenConnectionAsync();
+        //
+        // var protocol = await TdsProtocol.StartAsync(connection.Writer, connection.Stream, new SqlServerOptions
+        // {
+        //     EndPoint = IPEndPoint.Parse(DatabaseService.EndPoint),
+        //     Username = DatabaseService.Username,
+        //     Password = DatabaseService.Password,
+        //     Database = DatabaseService.Database
+        // }, null);
+        //
+        // if (!protocol.TryStartOperation(out var slot, OperationBehavior.None, CancellationToken.None))
+        //     throw new InvalidOperationException();
+        // var completionPair = protocol.WriteMessageAsync(slot, new SqlBatchMessage(new AllHeaders(null, new TransactionDescriptorHeader(0, 1), null), "SELECT 1"));
+        //
+        // var commandWriter = new TdsCommandWriter(new SqlServerDatabaseInfo(), Encoding.Unicode);
+        // var commandContext = commandWriter.WriteAsync(slot, new LowLevelSqlCommand());
 
-        var dataStreamWriter = new DataStreamWriter(new PipeStreamingWriter(connection.Writer), 4088);
-        var message = new PreloginMessage();
-        var output = dataStreamWriter.StartMessage(message.Header.Type, message.Header.Status);
-        var writer = new StreamingWriter<IStreamingWriter<byte>>(output);
-        message.Write(writer);
-        dataStreamWriter.Advance(writer.BufferedBytes, endMessage: true);
-        // writer.Commit();
-        // dataStreamWriter.EndMessage();
+        var dataSource = new WoodstarDataSource(new WoodstarDataSourceOptions
+        {
+            EndPoint = IPEndPoint.Parse(DatabaseService.EndPoint),
+            Username = DatabaseService.Username,
+            Password = DatabaseService.Password,
+            Database = DatabaseService.Database
+        }, new TdsProtocolOptions());
 
-        var loginMessage = new Login7Message(DatabaseService.Username, DatabaseService.Password, DatabaseService.Database, new byte[6]);
-        output = dataStreamWriter.StartMessage(loginMessage.Header.Type, loginMessage.Header.Status);
-        writer = new StreamingWriter<IStreamingWriter<byte>>(output);
-        loginMessage.Write(writer);
-        dataStreamWriter.Advance(writer.BufferedBytes, endMessage: true);
-        // writer.Commit();
-        // dataStreamWriter.EndMessage();
+        // while (true)
+        // {
+            var cmd = new LowLevelSqlCommand();
+            var slot = await dataSource.GetSlotAsync(exclusiveUse: true, Timeout.InfiniteTimeSpan);
+            var batch = await dataSource.WriteCommandAsync(slot, cmd);
+            batch = await dataSource.WriteCommandAsync(slot, cmd);
+            // batch = await dataSource.WriteCommandAsync(slot, cmd);
+            // batch = await dataSource.WriteCommandAsync(slot, cmd);
+            // batch = await dataSource.WriteCommandAsync(slot, cmd);
+            // batch = await dataSource.WriteCommandAsync(slot, cmd);
+            // batch = await dataSource.WriteCommandAsync(slot, cmd);
+            // batch = await dataSource.WriteCommandAsync(slot, cmd);
+            // batch = await dataSource.WriteCommandAsync(slot, cmd);
+            // batch = await dataSource.WriteCommandAsync(slot, cmd);
+            // batch = await dataSource.WriteCommandAsync(slot, cmd);
+            // batch = await dataSource.WriteCommandAsync(slot, cmd);
+            // batch = await dataSource.WriteCommandAsync(slot, cmd);
+            // batch = await dataSource.WriteCommandAsync(slot, cmd);
+            // batch = await dataSource.WriteCommandAsync(slot, cmd);
+            // batch = await dataSource.WriteCommandAsync(slot, cmd);
+            // batch = await dataSource.WriteCommandAsync(slot, cmd);
 
-        var sqlBatch = new SqlBatchMessage(new AllHeaders(null, new TransactionDescriptorHeader(0, 1), null), "SELECT , 3;");
-        output = dataStreamWriter.StartMessage(sqlBatch.Header.Type, sqlBatch.Header.Status);
-        writer = new StreamingWriter<IStreamingWriter<byte>>(output);
-        sqlBatch.Write(writer);
-        dataStreamWriter.Advance(writer.BufferedBytes, endMessage: true);
-        // writer.Commit();
-        // dataStreamWriter.EndMessage();
+            // DataSource.WriteMultiplexingCommand(cmd);
+            var op = await batch.Single.GetOperation();
+            var reader = ((TdsProtocol)op.Protocol).Reader;
+            var execution = batch.Single.GetCommandExecution();
+            await reader.ReadAndExpectAsync<EnvChangeToken>();
+            var metadata = await reader.ReadAndExpectAsync<ColumnMetadataToken>();
+            var resultSetReader = await reader.GetResultSetReaderAsync(metadata.ColumnData);
+            var value = await resultSetReader.GetAsync<int>();
+            // var value2 = await resultSetReader.GetAsync<int>();
+            await resultSetReader.MoveToNextRow();
+            await reader.ReadAndExpectAsync<DoneToken>();
+            op.Complete();
+        // }
+    }
 
-        await dataStreamWriter.FlushAsync();
+    struct LowLevelSqlCommand : ISqlCommand
+    {
+        static readonly ISqlCommand.BeginExecutionDelegate BeginExecutionCoreDelegate = BeginExecutionCore;
 
-        var packetStream = new TdsPacketStream(connection.Stream);
-        var streamReader = new BufferingStreamReader(packetStream);
-        await streamReader.ReadAtLeastAsync(35);
-        streamReader.Advance(35);
+        public ISqlCommand.Values GetValues()
+        {
+            return new ISqlCommand.Values
+            {
+                StatementText = (SizedString)"SELECT 1",
+                ExecutionFlags = ExecutionFlags.Default,
+                ExecutionTimeout = Timeout.InfiniteTimeSpan,
+                ParameterContext = ParameterContext.Empty,
+            };
+        }
 
-        var tokenReader = new TokenReader(streamReader);
-        await tokenReader.MoveNextAsync();
-        await tokenReader.MoveNextAsync();
-        await tokenReader.MoveNextAsync();
-        await tokenReader.MoveNextAsync();
-        await tokenReader.MoveNextAsync();
+        public CommandExecution BeginExecution(in ISqlCommand.Values values) => BeginExecutionCore(values);
+        public ISqlCommand.BeginExecutionDelegate BeginExecutionMethod => BeginExecutionCoreDelegate;
 
-        await tokenReader.MoveNextAsync();
-        await tokenReader.MoveNextAsync();
-        var metadata = tokenReader.Current;
-        await tokenReader.MoveNextAsync();
-        var resultSetReader = tokenReader.GetRowReader(((ColumnMetadataToken)metadata).ColumnDatums);
-        var value = await resultSetReader.GetAsync<string>();
-        var value2 = await resultSetReader.GetAsync<int>();
-        await resultSetReader.MoveToNextRow();
-        await tokenReader.MoveNextAsync();
+        static CommandExecution BeginExecutionCore(in ISqlCommand.Values values)
+        {
+            return CommandExecution.Create(values.ExecutionFlags, values.CommandFlags);
+        }
     }
 }

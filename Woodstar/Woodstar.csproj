@@ -16,7 +16,7 @@
   </ItemGroup>
 
   <ItemGroup>
-    <Compile Remove="Tds\Tds33\Tds33CommandReader.cs" />
+    <Compile Remove="Tds\TdsCommandReader.cs" />
   </ItemGroup>
 
 </Project>

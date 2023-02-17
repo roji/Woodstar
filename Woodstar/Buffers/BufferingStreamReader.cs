@@ -45,14 +45,15 @@ class BufferingStreamReader
                 throw new ArgumentOutOfRangeException(nameof(minimumSize));
             Debug.Assert(minimumSize > Remaining);
 
-            if (minimumSize > _buf.Length - Remaining)
+            if (minimumSize > Remaining)
             {
-                Array.Copy(_buf, _pos, _buf, 0, _count);
+                Array.Copy(_buf, _pos, _buf, 0, Remaining);
+                _count = Remaining;
                 _pos = 0;
             }
 
             _count += await _stream.ReadAtLeastAsync(
-                _buf.AsMemory(_count), minimumSize - Remaining, throwOnEndOfStream: true, cancellationToken);
+                _buf.AsMemory(Remaining), minimumSize - Remaining, throwOnEndOfStream: true, cancellationToken);
 
             return new BufferReader(this, _buf, _pos, _count);
         }

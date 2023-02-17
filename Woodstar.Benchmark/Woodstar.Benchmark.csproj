@@ -13,7 +13,7 @@
     <IsPackable>false</IsPackable>
   </PropertyGroup>
   <ItemGroup>
-<!--    <ProjectReference Include="..\Woodstar\Woodstar.csproj" />-->
+    <ProjectReference Include="..\Woodstar\Woodstar.csproj" />
     <PackageReference Include="BenchmarkDotNet" Version="0.13.2" />
     <PackageReference Include="BenchmarkDotNet.Diagnostics.Windows" Version="0.13.2" Condition="'$(OS)' == 'Windows_NT'" />
     <PackageReference Include="Microsoft.Data.SqlClient" Version="5.1.0" />

@@ -133,6 +133,7 @@ readonly record struct PacketHeader
         var id = Unsafe.Add(ref head, 6);
 
         header = new PacketHeader(type, status, length, id, spId: spId);
+        Debug.Assert(header.PacketSize >= ByteCount);
         return true;
 
         static void ThrowNotDefined(PacketType type) => throw new ArgumentOutOfRangeException(nameof(type), type, "Unknown packet type");

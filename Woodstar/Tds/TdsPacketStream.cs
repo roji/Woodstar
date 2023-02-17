@@ -16,6 +16,8 @@ public class TdsPacketStream : Stream
     byte[] _buf;
     int _pos, _count, _packetRemaining;
 
+    int Remaining => _count - _pos;
+
     public TdsPacketStream(Stream stream)
     {
         _stream = stream;
@@ -31,7 +33,7 @@ public class TdsPacketStream : Stream
 
         while (true)
         {
-            var copied = Math.Min(buffer.Length, Math.Min(_packetRemaining, _count - _pos));
+            var copied = Math.Min(buffer.Length, Math.Min(_packetRemaining, Remaining));
             _buf.AsMemory(_pos, copied).CopyTo(buffer);
             _pos += copied;
             _packetRemaining -= copied;
@@ -42,13 +44,16 @@ public class TdsPacketStream : Stream
 
             buffer = buffer.Slice(copied);
 
-            if (_count == _pos)
+            if (Remaining is 0)
             {
                 if (didRead)
                     return totalCopied;
 
                 _pos = 0;
-                _count = await _stream.ReadAsync(_buf, 0, _buf.Length, cancellationToken);
+                var read = await _stream.ReadAsync(_buf, 0, _buf.Length, cancellationToken);
+                _count = read;
+                if (read is 0)
+                    return totalCopied;
                 didRead = true;
                 if (!zeroByteRead)
                     continue;
@@ -58,18 +63,18 @@ public class TdsPacketStream : Stream
             Debug.Assert(_packetRemaining == 0);
 
             // We're now at the start of a new packet. Make sure we have a full header buffered.
-            if (_count < PacketHeader.ByteCount)
+            while (Remaining < PacketHeader.ByteCount)
             {
-                Array.Copy(_buf, _pos, _buf, 0, _count);
+                Array.Copy(_buf, _pos, _buf, 0, Remaining);
+                _count = Remaining;
                 _pos = 0;
-                _count += await _stream.ReadAtLeastAsync(
-                    _buf.AsMemory(_count),
-                    PacketHeader.ByteCount - _count,
-                    throwOnEndOfStream: true,
-                    cancellationToken);
+                var read = await _stream.ReadAsync(_buf, Remaining, _buf.Length - Remaining, cancellationToken);
+                _count += read;
+                if (read is 0)
+                    return totalCopied;
             }
 
-            Debug.Assert(_count >= PacketHeader.ByteCount);
+            Debug.Assert(Remaining >= PacketHeader.ByteCount);
 
             if (!PacketHeader.TryParse(_buf.AsSpan(_pos), out var header))
                 throw new InvalidOperationException("Couldn't parse TDS packet header");

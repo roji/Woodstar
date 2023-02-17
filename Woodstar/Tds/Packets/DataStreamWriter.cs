@@ -77,7 +77,7 @@ sealed class DataStreamWriter: IStreamingWriter<byte>
             _scratchBufferCount = 0;
             ReturnScratchBuffer();
         }
-        _packetId = 0;
+        // _packetId = 0;
     }
 
     public void EndMessage()

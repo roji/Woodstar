@@ -2,8 +2,10 @@ using System;
 using System.Data.Common;
 using System.Net;
 using System.Net.Sockets;
+using System.Runtime.CompilerServices;
 using System.Text;
 using System.Threading;
+using System.Threading.Channels;
 using System.Threading.Tasks;
 using Woodstar.Data;
 using Woodstar.Tds;
@@ -41,7 +43,7 @@ record WoodstarDataSourceOptions
     public TimeSpan CommandTimeout { get; init; } = DefaultCommandTimeout;
     public int AutoPrepareMinimumUses { get; set; }
 
-    internal SqlServerOptions ToPgOptions() => new()
+    internal SqlServerOptions ToSqlServerOptions() => new()
     {
         EndPoint = EndPoint,
         Username = Username,
@@ -68,27 +70,176 @@ class DefaultDatabaseInfoProvider: ISqlServerDatabaseInfoProvider
     public SqlServerDatabaseInfo Get(SqlServerOptions pgOptions, TimeSpan timeSpan) => Create();
     public ValueTask<SqlServerDatabaseInfo> GetAsync(SqlServerOptions pgOptions, CancellationToken cancellationToken = default) => new(Create());
 }
-public partial class WoodstarDataSource: DbDataSource, IConnectionFactory<Tds33Protocol>
+
+// Multiplexing
+public partial class WoodstarDataSource : ICommandExecutionProvider
+{
+    Channel<OperationSource> CreateChannel() =>
+        Channel.CreateUnbounded<OperationSource>(new UnboundedChannelOptions()
+        {
+            SingleReader = true,
+            AllowSynchronousContinuations = false,
+        });
+
+    struct MultiplexingItem: ISqlCommand
+    {
+        readonly ISqlCommand.BeginExecutionDelegate _beginExecutionDelegate;
+        ISqlCommand.Values _values;
+        CommandExecution _commandExecution;
+
+        public MultiplexingItem(ISqlCommand.BeginExecutionDelegate beginExecutionDelegate, in ISqlCommand.Values values)
+        {
+            _beginExecutionDelegate = beginExecutionDelegate;
+            _values = values;
+            _commandExecution = default;
+        }
+
+        public CommandExecution CommandExecution
+        {
+            get => _commandExecution;
+            set
+            {
+                // Null out the values so any heap objects can be freed before the entire operation is done.
+                _values = default;
+                _commandExecution = value;
+            }
+        }
+
+        public ISqlCommand.Values GetValues() => _values;
+        public ISqlCommand.BeginExecutionDelegate BeginExecutionMethod => throw new NotSupportedException();
+        public CommandExecution BeginExecution(in ISqlCommand.Values values) => _beginExecutionDelegate(values);
+    }
+
+    static async Task MultiplexingCommandWriter(ChannelReader<OperationSource> reader, WoodstarDataSource dataSource)
+    {
+        const int writeThreshold = 1000; // TODO arbitrary constant, it works well though...
+        var failedToEnqueue = false;
+        while (failedToEnqueue || await reader.WaitToReadAsync())
+        {
+            var bytesWritten = 0L;
+            TdsProtocol? protocol = null;
+            OperationSource source = null!;
+            try
+            {
+                if (failedToEnqueue || reader.TryRead(out source!))
+                {
+                    // Bind slot, this might throw.
+                    await dataSource.ConnectionSource.BindAsync(source, dataSource.ConnectionTimeout, source.CancellationToken).ConfigureAwait(false);
+                    protocol = (TdsProtocol)source.Protocol!;
+
+                    if (failedToEnqueue)
+                    {
+                        failedToEnqueue = false;
+                        if (!reader.TryRead(out source!))
+                            protocol = null;
+                    }
+                }
+
+                while (protocol is not null && !failedToEnqueue)
+                {
+                    // TODO this should probably only trigger if it also wrote a substantial amount (as a crude proxy for query compute cost)
+                    var fewPending = false; // pending <= 2;
+
+                    // D
+                    // Write command, might throw.
+                    var writeTask = WriteCommand(dataSource.GetDbDependencies().CommandWriter, source, flushHint: fewPending);
+
+                    // Flush (if necessary).
+                    var didFlush = fewPending;
+                    // TODO we may want to keep track of protocols that are flushing so even if it has the least pending we don't pick it.
+                    if (!didFlush && (!writeTask.IsCompleted || (bytesWritten += writeTask.Result.BytesWritten) >= writeThreshold || !reader.TryRead(out source!)))
+                    {
+                        // We don't need to await writeTask because flushasync will wait on the lock to release, which the writetask would be holding until completion.
+                        // All FlushAsync code is inside an async method, any exceptions will be stored on the task.
+                        var task = protocol.FlushAsync();
+                        if (!task.IsCompletedSuccessfully)
+                        {
+                            var _ = task.AsTask().ContinueWith(t =>
+                            {
+                                try
+                                {
+                                    t.GetAwaiter().GetResult();
+                                }
+                                catch (Exception ex)
+                                {
+                                    Console.WriteLine(ex.Message);
+                                }
+                            }, TaskContinuationOptions.OnlyOnFaulted | TaskContinuationOptions.ExecuteSynchronously | TaskContinuationOptions.DenyChildAttach);
+                        }
+
+                        protocol = null;
+                    }
+                    else if (didFlush)
+                        protocol = null;
+                    // Next.
+                    else if (!protocol.TryStartOperation(source, cancellationToken: source.CancellationToken))
+                        failedToEnqueue = true;
+                }
+            }
+            catch (Exception openOrWriteException)
+            {
+                try
+                {
+                    // Connection is borked.
+                    source?.TryComplete(openOrWriteException);
+                }
+                catch(Exception completionException)
+                {
+                    // TODO
+                    Console.WriteLine(completionException.Message);
+                }
+            }
+        }
+
+        static ValueTask<WriteResult> WriteCommand(TdsCommandWriter commandWriter, OperationSource source, bool flushHint)
+        {
+            ref var command = ref TdsProtocol.GetDataRef<MultiplexingItem>(source);
+            var commandContext = commandWriter.WriteAsync(source, command, flushHint, source.CancellationToken);
+            command.CommandExecution = commandContext.GetCommandExecution();
+            return commandContext.WriteTask;
+        }
+    }
+
+    CommandExecution ICommandExecutionProvider.Get(in CommandContext context)
+        => TdsProtocol.GetDataRef<MultiplexingItem>(context.ReadSlot).CommandExecution;
+
+#if !NETSTANDARD2_0
+    [AsyncMethodBuilder(typeof(PoolingAsyncValueTaskMethodBuilder<>))]
+#endif
+    internal async ValueTask<CommandContextBatch> WriteMultiplexingCommand<TCommand>(TCommand command, CancellationToken cancellationToken = default)
+        where TCommand: ISqlCommand
+    {
+        await EnsureInitializedAsync(cancellationToken);
+
+        var item = new MultiplexingItem(command.BeginExecutionMethod, command.GetValues());
+        var source = TdsProtocol.CreateUnboundOperationSource(item, cancellationToken);
+        await ChannelWriter.WriteAsync(source, cancellationToken).ConfigureAwait(false);
+        return CommandContext.Create(new IOCompletionPair(new (WriteResult.Unknown), source), this);
+    }
+}
+
+public partial class WoodstarDataSource: DbDataSource, IConnectionFactory<TdsProtocol>
 {
     readonly WoodstarDataSourceOptions _options;
     readonly SqlServerOptions _sqlServerOptions;
-    readonly Tds33ProtocolOptions _tds33ProtocolOptions;
+    readonly TdsProtocolOptions _tdsProtocolOptions;
     readonly ISqlServerDatabaseInfoProvider _databaseInfoProvider;
     readonly IFacetsTransformer _facetsTransformer;
     readonly SemaphoreSlim _lifecycleLock;
 
     // Initialized on the first real use.
-    ConnectionSource<Tds33Protocol>? _connectionSource;
+    ConnectionSource<TdsProtocol>? _connectionSource;
+    ChannelWriter<OperationSource>? _channelWriter;
     bool _isInitialized;
     DbDependencies? _dbDependencies;
 
-    internal WoodstarDataSource(WoodstarDataSourceOptions options, Tds33ProtocolOptions tds33ProtocolOptions, ISqlServerDatabaseInfoProvider? databaseInfoProvider = null)
+    internal WoodstarDataSource(WoodstarDataSourceOptions options, TdsProtocolOptions tdsProtocolOptions, ISqlServerDatabaseInfoProvider? databaseInfoProvider = null)
     {
         options.Validate();
         _options = options;
         EndPointRepresentation = options.EndPoint.AddressFamily is AddressFamily.InterNetwork or AddressFamily.InterNetworkV6 ? $"tcp://{options.EndPoint}" : options.EndPoint.ToString()!;
-        _sqlServerOptions = options.ToPgOptions();
-        _tds33ProtocolOptions = tds33ProtocolOptions;
+        _sqlServerOptions = options.ToSqlServerOptions();
+        _tdsProtocolOptions = tdsProtocolOptions;
         _databaseInfoProvider = databaseInfoProvider ?? new DefaultDatabaseInfoProvider();
         _facetsTransformer = new IdentityFacetsTransformer();
         _lifecycleLock = new(1);
@@ -96,7 +247,8 @@ public partial class WoodstarDataSource: DbDataSource, IConnectionFactory<Tds33P
 
     Exception NotInitializedException() => new InvalidOperationException("DataSource is not initialized yet, at least one connection needs to be opened first.");
 
-    ConnectionSource<Tds33Protocol> ConnectionSource => _connectionSource ?? throw NotInitializedException();
+    ChannelWriter<OperationSource> ChannelWriter => _channelWriter ?? throw NotInitializedException();
+    ConnectionSource<TdsProtocol> ConnectionSource => _connectionSource ?? throw NotInitializedException();
 
     // Store the result if multiple dependencies are required. The instance may be switched out during reloading.
     // To prevent any inconsistencies without having to obtain a lock on the data we instead use an immutable instance.
@@ -143,7 +295,10 @@ public partial class WoodstarDataSource: DbDataSource, IConnectionFactory<Tds33P
                 // We do DbDeps first as it may throw, otherwise we'd need to cleanup the other dependencies again.
                 _dbDependencies = await CreateDbDeps(async, Timeout.InfiniteTimeSpan, CancellationToken.None); // TODO for now we could hook up the right things (init timeout?) later.
 
-                _connectionSource = new ConnectionSource<Tds33Protocol>(this, _options.MaxPoolSize);
+                var channel = CreateChannel();
+                _channelWriter = channel.Writer;
+                _connectionSource = new ConnectionSource<TdsProtocol>(this, _options.MaxPoolSize);
+                var _ = Task.Run(() => MultiplexingCommandWriter(channel.Reader, this).ContinueWith(t => t.Exception, TaskContinuationOptions.OnlyOnFaulted));
                 _isInitialized = true;
                 // We insert a memory barrier to make sure _isInitialized is published to all processors before we release the semaphore.
                 // This is needed to be sure no other initialization will be started on another core that doesn't see _isInitialized = true yet but was already waiting for the lock.
@@ -205,16 +360,15 @@ public partial class WoodstarDataSource: DbDataSource, IConnectionFactory<Tds33P
         return ConnectionSource.Get(exclusiveUse, connectionTimeout);
     }
 
-    Tds33Protocol IConnectionFactory<Tds33Protocol>.Create(TimeSpan timeout)
+    TdsProtocol IConnectionFactory<TdsProtocol>.Create(TimeSpan timeout)
     {
         throw new NotImplementedException();
     }
 
-    async ValueTask<Tds33Protocol> IConnectionFactory<Tds33Protocol>.CreateAsync(CancellationToken cancellationToken)
+    async ValueTask<TdsProtocol> IConnectionFactory<TdsProtocol>.CreateAsync(CancellationToken cancellationToken)
     {
-        var pipes = await SqlServerStreamConnection.ConnectAsync(_options.EndPoint, cancellationToken);
-        throw new NotImplementedException();
-        // return await Tds33Protocol.StartAsync(pipes.Writer, pipes.Reader, _sqlServerOptions, _tds33ProtocolOptions);
+        var socket = await SqlServerStreamConnection.ConnectAsync(_options.EndPoint, cancellationToken);
+        return await TdsProtocol.StartAsync(socket.Writer, socket.Stream, _sqlServerOptions, _tdsProtocolOptions);
     }
 
     internal string SensitiveConnectionString => throw new NotImplementedException();
@@ -268,7 +422,7 @@ public partial class WoodstarDataSource: DbDataSource, IConnectionFactory<Tds33P
 
         public SqlServerDatabaseInfo DatabaseInfo { get; }
         public SqlServerConverterOptions ConverterOptions { get; }
-        public Tds33CommandWriter CommandWriter { get; }
+        public TdsCommandWriter CommandWriter { get; }
         public int Revision { get; }
 
         public ParameterContextBuilderFactory ParameterContextBuilderFactory { get; }

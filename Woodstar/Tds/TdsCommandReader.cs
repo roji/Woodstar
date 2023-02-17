@@ -39,9 +39,9 @@ enum StatementType
 #pragma warning restore 1591
 }
 
-class Tds33CommandReader
+class TdsCommandReader
 {
-    readonly Action<Tds33CommandReader>? _returnAction;
+    readonly Action<TdsCommandReader>? _returnAction;
     CommandReaderState _state;
 
     // Recycled instances.
@@ -51,7 +51,7 @@ class Tds33CommandReader
     // Set during InitializeAsync.
     Operation _operation;
 
-    public Tds33CommandReader(Encoding encoding, Action<Tds33CommandReader>? returnAction = null)
+    public TdsCommandReader(Encoding encoding, Action<TdsCommandReader>? returnAction = null)
     {
         _returnAction = returnAction;
         _startCommand = new();
@@ -176,7 +176,7 @@ class Tds33CommandReader
 #if !NETSTANDARD2_0
         [AsyncMethodBuilder(typeof(PoolingAsyncValueTaskMethodBuilder<>))]
 #endif
-        static async ValueTask<T> Core(Tds33CommandReader instance, Tds33Protocol protocol, Operation operation, T message, CancellationToken cancellationToken)
+        static async ValueTask<T> Core(TdsCommandReader instance, Tds33Protocol protocol, Operation operation, T message, CancellationToken cancellationToken)
         {
             try
             {
@@ -190,7 +190,7 @@ class Tds33CommandReader
         }
     }
 
-    Tds33CommandReader ThrowIfNotInitialized()
+    TdsCommandReader ThrowIfNotInitialized()
     {
         if (_state is CommandReaderState.None)
             ThrowNotInitialized();
@@ -200,7 +200,7 @@ class Tds33CommandReader
         void ThrowNotInitialized() => throw new InvalidOperationException("Command reader wasn't initialized properly, this is a bug.");
     }
 
-    Tds33CommandReader ThrowIfNotCompleted()
+    TdsCommandReader ThrowIfNotCompleted()
     {
         if (_state is not CommandReaderState.Completed)
             ThrowNotCompleted();
@@ -261,7 +261,7 @@ class Tds33CommandReader
                 return HandleUncommon(this);
         }
 
-        static async Task<bool> Core(Tds33CommandReader instance, ReadStatus status, IReadOnlyCollection<IParameterSession>? writableParameters = null, CancellationToken cancellationToken = default)
+        static async Task<bool> Core(TdsCommandReader instance, ReadStatus status, IReadOnlyCollection<IParameterSession>? writableParameters = null, CancellationToken cancellationToken = default)
         {
             // Skip the read if we haven't gotten any writable parameters, in that case we handle the given status (which is the most common reason for calling this method).
             var skipRead = writableParameters is null;
@@ -315,7 +315,7 @@ class Tds33CommandReader
             }
         }
 
-        static Task<bool> HandleUncommon(Tds33CommandReader instance)
+        static Task<bool> HandleUncommon(TdsCommandReader instance)
         {
             switch (instance._state)
             {
@@ -337,7 +337,7 @@ class Tds33CommandReader
 #if !NETSTANDARD2_0
         [AsyncMethodBuilder(typeof(PoolingAsyncValueTaskMethodBuilder))]
 #endif
-        static async ValueTask BufferData(Tds33CommandReader instance, CancellationToken cancellationToken = default)
+        static async ValueTask BufferData(TdsCommandReader instance, CancellationToken cancellationToken = default)
         {
             var result = await instance.ReadMessageAsync(
                 new ExpandBuffer(instance._rowReader.ResumptionData, instance._rowReader.Consumed),
@@ -348,7 +348,7 @@ class Tds33CommandReader
 #if !NETSTANDARD2_0
         [AsyncMethodBuilder(typeof(PoolingAsyncValueTaskMethodBuilder<>))]
 #endif
-        static async ValueTask<bool> CompleteCommand(Tds33CommandReader instance, bool unexpected, CancellationToken cancellationToken = default)
+        static async ValueTask<bool> CompleteCommand(TdsCommandReader instance, bool unexpected, CancellationToken cancellationToken = default)
         {
             if (unexpected)
             {
@@ -364,7 +364,7 @@ class Tds33CommandReader
             return false;
         }
 
-        static ValueTask HandleAsyncResponse(Tds33CommandReader instance, CancellationToken cancellationToken = default)
+        static ValueTask HandleAsyncResponse(TdsCommandReader instance, CancellationToken cancellationToken = default)
         {
             // TODO implement async response, even though technically the protocol as implemented in postgres never mixes async responses and rows (see pg docs).
             throw new NotImplementedException();

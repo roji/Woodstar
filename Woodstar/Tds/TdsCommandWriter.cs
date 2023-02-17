@@ -3,21 +3,22 @@ using System.Text;
 using System.Threading;
 using Woodstar.SqlServer;
 using Woodstar.Tds.Messages;
+using Woodstar.Tds.Tds33;
 
-namespace Woodstar.Tds.Tds33;
+namespace Woodstar.Tds;
 
-class Tds33CommandWriter : CommandWriter
+class TdsCommandWriter : CommandWriter
 {
     readonly Encoding _encoding;
 
-    public Tds33CommandWriter(SqlServerDatabaseInfo sqlServerDatabaseInfo, Encoding encoding)
+    public TdsCommandWriter(SqlServerDatabaseInfo sqlServerDatabaseInfo, Encoding encoding)
     {
         _encoding = encoding;
     }
 
     public override CommandContext WriteAsync<TCommand>(OperationSlot slot, in TCommand command, bool flushHint = true, CancellationToken cancellationToken = default)
     {
-        if (slot.Protocol is not Tds33Protocol protocol)
+        if (slot.Protocol is not TdsProtocol protocol)
         {
             ThrowInvalidSlot();
             return default;
@@ -32,6 +33,6 @@ class Tds33CommandWriter : CommandWriter
     }
 
     static void ThrowInvalidSlot()
-        => throw new ArgumentException($"Cannot use a slot for a different protocol type, expected: {nameof(Tds33Protocol)}.", "slot");
+        => throw new ArgumentException($"Cannot use a slot for a different protocol type, expected: {nameof(TdsProtocol)}.", "slot");
 
 } 
