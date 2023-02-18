@@ -348,7 +348,7 @@ class TokenReader
             case TokenType.DONEPROC:
             case TokenType.DONEINPROC:
             default:
-                throw new ArgumentOutOfRangeException();
+                throw new ArgumentOutOfRangeException($"Unknown token type: {tokenType}");
         }
 
         return result;

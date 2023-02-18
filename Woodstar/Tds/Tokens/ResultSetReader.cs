@@ -34,6 +34,7 @@ class ResultSetReader
     internal async Task<bool> MoveToNextRow(CancellationToken cancellationToken = default)
     {
         _reader.Commit();
+        _reader = BufferReader.Empty;
 
         var token = await _tokenReader.ReadAsync(cancellationToken);
 
