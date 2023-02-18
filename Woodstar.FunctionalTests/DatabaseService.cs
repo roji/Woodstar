@@ -10,7 +10,7 @@ public class DatabaseService : ICollectionFixture<DatabaseService>
 {
     public const string EndPoint = "127.0.0.1:1433";
     public const string Username = "sa";
-    public const string Password = "Password1234";
+    public const string Password = "Abcd5678";
     public const string Database = "msdb";
 
     internal ValueTask<SqlServerStreamConnection> OpenConnectionAsync(CancellationToken cancellationToken = default)

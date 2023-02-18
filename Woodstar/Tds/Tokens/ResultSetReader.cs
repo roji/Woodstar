@@ -11,14 +11,18 @@ namespace Woodstar.Tds.Tokens;
 
 class ResultSetReader
 {
+    readonly TokenReader _tokenReader;
     readonly BufferingStreamReader _streamReader;
     List<ColumnData> _columnData = null!;
     BufferReader _reader;
     readonly List<int> _columnStartPositions = new();
     int _currentColumn;
 
-    internal ResultSetReader(BufferingStreamReader streamReader)
-        => _streamReader = streamReader;
+    internal ResultSetReader(TokenReader tokenReader, BufferingStreamReader streamReader)
+    {
+        _tokenReader = tokenReader;
+        _streamReader = streamReader;
+    }
 
     internal void Initialize(List<ColumnData> columnData)
     {
@@ -30,8 +34,15 @@ class ResultSetReader
     internal async Task<bool> MoveToNextRow(CancellationToken cancellationToken = default)
     {
         _reader.Commit();
-        return false;
-// ?        throw new NotImplementedException();
+
+        var token = await _tokenReader.ReadAsync(cancellationToken);
+
+        return token switch
+        {
+            RowToken => true,
+            DoneToken => false,
+            _ => throw new ArgumentOutOfRangeException()
+        };
     }
 
     internal async ValueTask<T> GetAsync<T>(int? column = null, CancellationToken cancellationToken = default)
@@ -62,7 +73,7 @@ class ResultSetReader
             // _columnData[0].Type.LengthKind ?
             // var totalMinimumSeekLength = 0;
 
-        while (_currentColumn < columnIndex)
+        while (_currentColumn < columnIndex - 1)
         {
             var dataType = _columnData[_currentColumn + 1].Type;
             switch (dataType.LengthKind)

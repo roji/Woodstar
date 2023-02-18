@@ -153,15 +153,53 @@ public class DebugTests
         // }
     }
 
+    [Fact]
+    public async Task Fortunes()
+    {
+        var dataSource = new WoodstarDataSource(new WoodstarDataSourceOptions
+        {
+            EndPoint = IPEndPoint.Parse(DatabaseService.EndPoint),
+            Username = DatabaseService.Username,
+            Password = DatabaseService.Password,
+            Database = "Fortunes"
+        }, new TdsProtocolOptions());
+
+        var cmd = new LowLevelSqlCommand("SELECT id, message FROM fortune");
+        var slot = await dataSource.GetSlotAsync(exclusiveUse: true, Timeout.InfiniteTimeSpan);
+        var batch = await dataSource.WriteCommandAsync(slot, cmd);
+        var op = await batch.Single.GetOperation();
+        var reader = ((TdsProtocol)op.Protocol).Reader;
+
+        await reader.ReadAndExpectAsync<EnvChangeToken>();
+        var metadata = await reader.ReadAndExpectAsync<ColumnMetadataToken>();
+        var resultSetReader = await reader.GetResultSetReaderAsync(metadata.ColumnData);
+
+        do
+        {
+            var id = await resultSetReader.GetAsync<int>(0);
+            var message = await resultSetReader.GetAsync<string>(1);
+
+            Console.WriteLine($"Fortunes row: {id}, {message}");
+        } while (await resultSetReader.MoveToNextRow());
+
+        await reader.ReadAndExpectAsync<DoneToken>();
+        op.Complete();
+    }
+
     struct LowLevelSqlCommand : ISqlCommand
     {
         static readonly ISqlCommand.BeginExecutionDelegate BeginExecutionCoreDelegate = BeginExecutionCore;
+
+        public LowLevelSqlCommand(string sqlStatement)
+            => SqlStatement = sqlStatement;
+
+        public string SqlStatement { get; }
 
         public ISqlCommand.Values GetValues()
         {
             return new ISqlCommand.Values
             {
-                StatementText = (SizedString)"SELECT 1",
+                StatementText = (SizedString)SqlStatement,
                 ExecutionFlags = ExecutionFlags.Default,
                 ExecutionTimeout = Timeout.InfiniteTimeSpan,
                 ParameterContext = ParameterContext.Empty,

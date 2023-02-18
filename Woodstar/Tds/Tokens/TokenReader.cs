@@ -16,7 +16,7 @@ class TokenReader
     public TokenReader(BufferingStreamReader streamReader)
     {
         _streamReader = streamReader;
-        _resultSetReader = new(streamReader);
+        _resultSetReader = new(this, streamReader);
     }
     
     public async ValueTask<ResultSetReader> GetResultSetReaderAsync(List<ColumnData> columnData, CancellationToken cancellationToken = default)
@@ -93,6 +93,7 @@ class TokenReader
                 result = tokenType is TokenType.INFO
                     ? new InfoToken(number, state, @class, msgText!, serverName!, procName!, lineNumber)
                     : new ErrorToken(number, state, @class, msgText!, serverName!, procName!, lineNumber);
+
                 reader.Commit();
                 break;
             }
