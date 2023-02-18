@@ -74,7 +74,7 @@ class ResultSetReader
             // _columnData[0].Type.LengthKind ?
             // var totalMinimumSeekLength = 0;
 
-        while (_currentColumn < columnIndex - 1)
+        while (_currentColumn++ < columnIndex)
         {
             var dataType = _columnData[_currentColumn + 1].Type;
             switch (dataType.LengthKind)
@@ -84,8 +84,7 @@ class ResultSetReader
                     if (_reader.Remaining < dataType.Length)
                         _reader = await _streamReader.ReadAtLeastAsync(dataType.Length, cancellationToken);
 
-                    if (_currentColumn < columnIndex - 1)
-                        _reader.Advance(dataType.Length);
+                    _reader.Advance(dataType.Length);
                     break;
                 }
                 case DataTypeLengthKind.VariableByte:
@@ -93,8 +92,7 @@ class ResultSetReader
                     if (!_reader.TryRead(out var length) || _reader.Remaining < length)
                         _reader = await _streamReader.ReadAtLeastAsync(length + sizeof(byte), cancellationToken);
 
-                    if (_currentColumn < columnIndex - 1)
-                        _reader.Advance(length + sizeof(byte));
+                    _reader.Advance(length);
                     break;
                 }
                 case DataTypeLengthKind.VariableUShort:
@@ -102,8 +100,7 @@ class ResultSetReader
                     if (!_reader.TryReadLittleEndian(out ushort length) || _reader.Remaining < length)
                         _reader = await _streamReader.ReadAtLeastAsync(length + sizeof(ushort), cancellationToken);
 
-                    if (_currentColumn < columnIndex - 1)
-                        _reader.Advance(length + sizeof(ushort));
+                    _reader.Advance(length);
                     break;
                 }
                 case DataTypeLengthKind.VariableInt:
@@ -111,8 +108,7 @@ class ResultSetReader
                     if (!_reader.TryReadLittleEndian(out int length) || _reader.Remaining < length)
                         _reader = await _streamReader.ReadAtLeastAsync(length + sizeof(int), cancellationToken);
 
-                    if (_currentColumn < columnIndex - 1)
-                        _reader.Advance(length + sizeof(int));
+                    _reader.Advance(length);
                     break;
                 }
                 case DataTypeLengthKind.PartiallyLengthPrefixed:
@@ -121,8 +117,6 @@ class ResultSetReader
                 default:
                     throw new ArgumentOutOfRangeException();
             }
-
-            _currentColumn++;
         }
 
         T? result = default;
@@ -136,6 +130,9 @@ class ResultSetReader
                 throw new NotImplementedException();
             case DataTypeCode.INT4TYPE:
             {
+                if (_reader.Remaining < sizeof(int))
+                    _reader = await _streamReader.ReadAtLeastAsync(4, cancellationToken);
+
                 if (typeof(T) == typeof(int))
                 {
                     _reader.TryReadLittleEndian(out int value);

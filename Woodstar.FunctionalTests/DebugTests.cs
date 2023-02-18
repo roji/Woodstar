@@ -182,7 +182,6 @@ public class DebugTests
             Console.WriteLine($"Fortunes row: {id}, {message}");
         } while (await resultSetReader.MoveToNextRow());
 
-        await reader.ReadAndExpectAsync<DoneToken>();
         op.Complete();
     }
 
