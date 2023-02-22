@@ -26,6 +26,68 @@ public class DebugTests
     }
 
     [Fact]
+    public async Task Simple_query()
+    {
+        var dataSource = new WoodstarDataSource(new WoodstarDataSourceOptions
+        {
+            EndPoint = IPEndPoint.Parse(DatabaseService.EndPoint),
+            Username = DatabaseService.Username,
+            Password = DatabaseService.Password,
+            Database = DatabaseService.Database
+        }, new TdsProtocolOptions());
+
+        var cmd = new LowLevelSqlCommand("SELECT 1");
+        var slot = await dataSource.GetSlotAsync(exclusiveUse: true, Timeout.InfiniteTimeSpan);
+        var batch = await dataSource.WriteCommandAsync(slot, cmd);
+
+        var op = await batch.Single.GetOperation();
+        var reader = ((TdsProtocol)op.Protocol).Reader;
+        await reader.ReadAndExpectAsync<EnvChangeToken>();
+        var metadata = await reader.ReadAndExpectAsync<ColumnMetadataToken>();
+        var resultSetReader = await reader.GetResultSetReaderAsync(metadata.ColumnData);
+        var value = await resultSetReader.GetAsync<int>();
+        Assert.Equal(1, value);
+        Assert.False(await resultSetReader.MoveToNextRow());
+        op.Complete();
+    }
+
+    [Fact]
+    public async Task Fortunes()
+    {
+        var dataSource = new WoodstarDataSource(new WoodstarDataSourceOptions
+        {
+            EndPoint = IPEndPoint.Parse(DatabaseService.EndPoint),
+            Username = DatabaseService.Username,
+            Password = DatabaseService.Password,
+            Database = "Fortunes"
+        }, new TdsProtocolOptions());
+
+        var cmd = new LowLevelSqlCommand("SELECT id, message FROM fortune");
+        var slot = await dataSource.GetSlotAsync(exclusiveUse: true, Timeout.InfiniteTimeSpan);
+        var batch = await dataSource.WriteCommandAsync(slot, cmd);
+        var op = await batch.Single.GetOperation();
+        var reader = ((TdsProtocol)op.Protocol).Reader;
+
+        await reader.ReadAndExpectAsync<EnvChangeToken>();
+        var metadata = await reader.ReadAndExpectAsync<ColumnMetadataToken>();
+        var resultSetReader = await reader.GetResultSetReaderAsync(metadata.ColumnData);
+
+        var rows = 0;
+        do
+        {
+            var id = await resultSetReader.GetAsync<int>(0);
+            var message = await resultSetReader.GetAsync<string>(1);
+
+            if (id == 7)
+                Assert.Equal("Any program that runs right is obsolete.", message);
+            rows++;
+        } while (await resultSetReader.MoveToNextRow());
+
+        Assert.Equal(12, rows);
+        op.Complete();
+    }
+
+    [Fact]
     public async Task Multiplexing()
     {
         var dataSource = new WoodstarDataSource(new WoodstarDataSourceOptions
@@ -86,103 +148,6 @@ public class DebugTests
         //     {
         //     }
         // }
-    }
-
-    [Fact]
-    public async Task PreloginTest()
-    {
-        var connection = await _databaseService.OpenConnectionAsync();
-        //
-        // var protocol = await TdsProtocol.StartAsync(connection.Writer, connection.Stream, new SqlServerOptions
-        // {
-        //     EndPoint = IPEndPoint.Parse(DatabaseService.EndPoint),
-        //     Username = DatabaseService.Username,
-        //     Password = DatabaseService.Password,
-        //     Database = DatabaseService.Database
-        // }, null);
-        //
-        // if (!protocol.TryStartOperation(out var slot, OperationBehavior.None, CancellationToken.None))
-        //     throw new InvalidOperationException();
-        // var completionPair = protocol.WriteMessageAsync(slot, new SqlBatchMessage(new AllHeaders(null, new TransactionDescriptorHeader(0, 1), null), "SELECT 1"));
-        //
-        // var commandWriter = new TdsCommandWriter(new SqlServerDatabaseInfo(), Encoding.Unicode);
-        // var commandContext = commandWriter.WriteAsync(slot, new LowLevelSqlCommand());
-
-        var dataSource = new WoodstarDataSource(new WoodstarDataSourceOptions
-        {
-            EndPoint = IPEndPoint.Parse(DatabaseService.EndPoint),
-            Username = DatabaseService.Username,
-            Password = DatabaseService.Password,
-            Database = DatabaseService.Database
-        }, new TdsProtocolOptions());
-
-        // while (true)
-        // {
-            var cmd = new LowLevelSqlCommand();
-            var slot = await dataSource.GetSlotAsync(exclusiveUse: true, Timeout.InfiniteTimeSpan);
-            var batch = await dataSource.WriteCommandAsync(slot, cmd);
-            batch = await dataSource.WriteCommandAsync(slot, cmd);
-            // batch = await dataSource.WriteCommandAsync(slot, cmd);
-            // batch = await dataSource.WriteCommandAsync(slot, cmd);
-            // batch = await dataSource.WriteCommandAsync(slot, cmd);
-            // batch = await dataSource.WriteCommandAsync(slot, cmd);
-            // batch = await dataSource.WriteCommandAsync(slot, cmd);
-            // batch = await dataSource.WriteCommandAsync(slot, cmd);
-            // batch = await dataSource.WriteCommandAsync(slot, cmd);
-            // batch = await dataSource.WriteCommandAsync(slot, cmd);
-            // batch = await dataSource.WriteCommandAsync(slot, cmd);
-            // batch = await dataSource.WriteCommandAsync(slot, cmd);
-            // batch = await dataSource.WriteCommandAsync(slot, cmd);
-            // batch = await dataSource.WriteCommandAsync(slot, cmd);
-            // batch = await dataSource.WriteCommandAsync(slot, cmd);
-            // batch = await dataSource.WriteCommandAsync(slot, cmd);
-            // batch = await dataSource.WriteCommandAsync(slot, cmd);
-
-            // DataSource.WriteMultiplexingCommand(cmd);
-            var op = await batch.Single.GetOperation();
-            var reader = ((TdsProtocol)op.Protocol).Reader;
-            var execution = batch.Single.GetCommandExecution();
-            await reader.ReadAndExpectAsync<EnvChangeToken>();
-            var metadata = await reader.ReadAndExpectAsync<ColumnMetadataToken>();
-            var resultSetReader = await reader.GetResultSetReaderAsync(metadata.ColumnData);
-            var value = await resultSetReader.GetAsync<int>();
-            // var value2 = await resultSetReader.GetAsync<int>();
-            await resultSetReader.MoveToNextRow();
-            await reader.ReadAndExpectAsync<DoneToken>();
-            op.Complete();
-        // }
-    }
-
-    [Fact]
-    public async Task Fortunes()
-    {
-        var dataSource = new WoodstarDataSource(new WoodstarDataSourceOptions
-        {
-            EndPoint = IPEndPoint.Parse(DatabaseService.EndPoint),
-            Username = DatabaseService.Username,
-            Password = DatabaseService.Password,
-            Database = "Fortunes"
-        }, new TdsProtocolOptions());
-
-        var cmd = new LowLevelSqlCommand("SELECT id, message FROM fortune");
-        var slot = await dataSource.GetSlotAsync(exclusiveUse: true, Timeout.InfiniteTimeSpan);
-        var batch = await dataSource.WriteCommandAsync(slot, cmd);
-        var op = await batch.Single.GetOperation();
-        var reader = ((TdsProtocol)op.Protocol).Reader;
-
-        await reader.ReadAndExpectAsync<EnvChangeToken>();
-        var metadata = await reader.ReadAndExpectAsync<ColumnMetadataToken>();
-        var resultSetReader = await reader.GetResultSetReaderAsync(metadata.ColumnData);
-
-        do
-        {
-            var id = await resultSetReader.GetAsync<int>(0);
-            var message = await resultSetReader.GetAsync<string>(1);
-
-            Console.WriteLine($"Fortunes row: {id}, {message}");
-        } while (await resultSetReader.MoveToNextRow());
-
-        op.Complete();
     }
 
     struct LowLevelSqlCommand : ISqlCommand

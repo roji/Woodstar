@@ -27,7 +27,7 @@ class ResultSetReader
     internal void Initialize(List<ColumnData> columnData)
     {
         _columnData = columnData;
-        _currentColumn = -1;
+        _currentColumn = 0;
         _reader = BufferReader.Empty;
     }
 
@@ -48,7 +48,7 @@ class ResultSetReader
 
     internal async ValueTask<T> GetAsync<T>(int? column = null, CancellationToken cancellationToken = default)
     {
-        var columnIndex = column ?? _currentColumn + 1;
+        var columnIndex = column ?? _currentColumn;
 
         ReadOnlySequence<byte> columnStartSlice;
 
@@ -74,9 +74,9 @@ class ResultSetReader
             // _columnData[0].Type.LengthKind ?
             // var totalMinimumSeekLength = 0;
 
-        while (_currentColumn++ < columnIndex)
+        for (; _currentColumn < columnIndex; _currentColumn++)
         {
-            var dataType = _columnData[_currentColumn + 1].Type;
+            var dataType = _columnData[_currentColumn].Type;
             switch (dataType.LengthKind)
             {
                 case DataTypeLengthKind.Fixed:
@@ -215,6 +215,7 @@ class ResultSetReader
                 throw new NotSupportedException();
         }
 
+        _currentColumn++;
         return result;
     }
 
