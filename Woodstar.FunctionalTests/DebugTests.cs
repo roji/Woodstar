@@ -12,17 +12,20 @@ using Woodstar.Tds.SqlServer;
 using Woodstar.Tds.Tds33;
 using Woodstar.Tds.Tokens;
 using Xunit;
+using Xunit.Abstractions;
 
 namespace Woodstar.FunctionalTests;
 
 [Collection("Database")]
 public class DebugTests
 {
+    private readonly ITestOutputHelper _outputHelper;
     readonly DatabaseService _databaseService;
 
-    public DebugTests(DatabaseService databaseService)
+    public DebugTests(DatabaseService databaseService, ITestOutputHelper outputHelper)
     {
         _databaseService = databaseService;
+        _outputHelper = outputHelper;
     }
 
     [Fact]
@@ -158,8 +161,7 @@ public class DebugTests
             await reader.ReadAndExpectAsync<EnvChangeToken>();
             var metadata = await reader.ReadAndExpectAsync<ColumnMetadataToken>();
             var resultSetReader = await reader.GetResultSetReaderAsync(metadata.ColumnData);
-            var value = await resultSetReader.GetAsync<int>();
-            // var value2 = await resultSetReader.GetAsync<int>();
+            Assert.Equal(1, await resultSetReader.GetAsync<int>());
             await resultSetReader.MoveToNextRow();
             op.Complete();
         }

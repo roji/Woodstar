@@ -39,7 +39,8 @@ readonly struct SqlBatchMessage: IFrontendMessage
             var nextLength = Math.Min(chunkSize, value.Length - offset);
             encoder = writer.WriteEncodedResumable(value.AsSpan(offset, nextLength), Encoding.Unicode, encoder);
             offset += nextLength;
-            await writer.FlushAsync(cancellationToken);
+            // TODO: Flush, but only if the string doesn't fit in our buffer
+            // await writer.FlushAsync(cancellationToken);
         }
     }
 }
