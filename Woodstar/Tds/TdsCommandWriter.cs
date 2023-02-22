@@ -30,7 +30,7 @@ class TdsCommandWriter : CommandWriter
         var commandExecution = command.BeginExecution(values);
 
         // var completionPair = protocol.WriteMessageAsync(slot, new SqlBatchMessage(new AllHeaders(null, new TransactionDescriptorHeader(0, 1), null), values.StatementText));
-        var completionPair = protocol.WriteMessageAsync(slot, new RpcRequestMessage(new AllHeaders(null, new TransactionDescriptorHeader(0, 1), null), SpecialProcId.ExecuteSql, values.StatementText));
+        var completionPair = protocol.WriteMessageAsync(slot, new RpcRequestMessage(new AllHeaders(null, new TransactionDescriptorHeader(0, 1), null), SpecialProcId.ExecuteSql, values.StatementText), flushHint, cancellationToken);
 
         return CommandContext.Create(completionPair, commandExecution);
     }

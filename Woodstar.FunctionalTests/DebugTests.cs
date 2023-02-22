@@ -104,13 +104,13 @@ public class DebugTests
 
         var commandWriter = new TdsCommandWriter(new SqlServerDatabaseInfo(), Encoding.Unicode);
 
-        var commandContexts = Enumerable.Range(0, 3)
-            .Select(_ =>
-            {
-                if (!protocol.TryStartOperation(out var slot, OperationBehavior.None, CancellationToken.None))
-                    throw new InvalidOperationException();
-                return commandWriter.WriteAsync(slot, new LowLevelSqlCommand("SELECT 1"));
-            });
+        var commandContexts = new CommandContext[2];
+        for (var i = 0; i < commandContexts.Length; i++)
+        {
+            if (!protocol.TryStartOperation(out var slot, OperationBehavior.None, CancellationToken.None))
+                throw new InvalidOperationException();
+            commandContexts[i] = commandWriter.WriteAsync(slot, new LowLevelSqlCommand("SELECT 1"), flushHint: i == commandContexts.Length - 1);
+        }
 
         foreach (var commandContext in commandContexts)
         {
