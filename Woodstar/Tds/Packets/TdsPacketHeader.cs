@@ -13,15 +13,15 @@ static class TdsPackets
 
 enum TdsPacketType : byte
 {
-    SQLBatch = 1,
-    RPC = 3,
+    SqlBatch = 1,
+    Rpc = 3,
     TabularResult = 4,
     AttentionSignal = 6,
     BulkLoadData = 7,
     FederatedAuthenticationToken = 8,
     TransactionManagerRequest = 14,
-    TDS7Login = 16,
-    SSPI = 17,
+    Tds7Login = 16,
+    Sspi = 17,
     PreLogin = 18
 }
 

@@ -49,7 +49,7 @@ public class DataStreamWriterTests
         const int packets = 2;
         const int lastPacketSize = PacketSize;
 
-        Writer.StartMessage(TdsPacketType.SQLBatch, MessageStatus.Normal);
+        Writer.StartMessage(TdsPacketType.SqlBatch, MessageStatus.Normal);
         var span = Writer.GetSpan();
         span.Slice(0, PayloadSize).Fill(PayloadData);
         Writer.Advance(PayloadSize);
@@ -58,7 +58,7 @@ public class DataStreamWriterTests
         span.Slice(0, PayloadSize).Fill(PayloadData);
         Writer.Advance(PayloadSize, endMessage: true);
 
-        VerifyData(packets, lastPacketSize, TdsPacketType.SQLBatch, MessageStatus.Normal);
+        VerifyData(packets, lastPacketSize, TdsPacketType.SqlBatch, MessageStatus.Normal);
     }
 
     [Fact]
@@ -92,7 +92,7 @@ public class DataStreamWriterTests
         const int chunkSize = PayloadSize / 4;
         const int lastPacketSize = chunkSize * 4 + TdsPacketHeader.ByteCount;
 
-        Writer.StartMessage(TdsPacketType.RPC, MessageStatus.Normal);
+        Writer.StartMessage(TdsPacketType.Rpc, MessageStatus.Normal);
         // Fill one chunk.
         var span = Writer.GetSpan();
         span.Slice(0, chunkSize).Fill(PayloadData);
@@ -119,7 +119,7 @@ public class DataStreamWriterTests
         // Advance by zero should still finish the message.
         Writer.Advance(0, endMessage: true);
 
-        VerifyData(packets, lastPacketSize, TdsPacketType.RPC, MessageStatus.Normal);
+        VerifyData(packets, lastPacketSize, TdsPacketType.Rpc, MessageStatus.Normal);
     }
 
     void VerifyData(int packets, int expectLastPacketSize, TdsPacketType type, MessageStatus status)

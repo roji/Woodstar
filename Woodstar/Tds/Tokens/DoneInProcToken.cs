@@ -2,9 +2,9 @@ using System;
 
 namespace Woodstar.Tds.Tokens;
 
-class DoneToken : Token
+class DoneInProcToken : Token
 {
-    public DoneToken(DoneStatus status, ushort currentCommand, ulong doneRowCount)
+    public DoneInProcToken(DoneStatus status, ushort currentCommand, ulong doneRowCount)
     {
         Status = status;
         CurrentCommand = currentCommand;
@@ -14,5 +14,4 @@ class DoneToken : Token
     public DoneStatus Status { get; }
     public ushort CurrentCommand { get; }
     public ulong DoneRowCount { get; }
-
 }

@@ -28,7 +28,10 @@ class TdsCommandWriter : CommandWriter
 
         // We need to create the command execution before writing to prevent any races, as the read slot could already be completed.
         var commandExecution = command.BeginExecution(values);
-        var completionPair = protocol.WriteMessageAsync(slot, new SqlBatchMessage(new AllHeaders(null, new TransactionDescriptorHeader(0, 1), null), values.StatementText));
+
+        // var completionPair = protocol.WriteMessageAsync(slot, new SqlBatchMessage(new AllHeaders(null, new TransactionDescriptorHeader(0, 1), null), values.StatementText));
+        var completionPair = protocol.WriteMessageAsync(slot, new RpcRequestMessage(new AllHeaders(null, new TransactionDescriptorHeader(0, 1), null), SpecialProcId.ExecuteSql, values.StatementText));
+
         return CommandContext.Create(completionPair, commandExecution);
     }
 

@@ -231,7 +231,7 @@ class ConnectionSource<T>: IDisposable where T : Protocol
     public ValueTask<OperationSlot> GetAsync(bool exclusiveUse, TimeSpan connectionTimeout, CancellationToken cancellationToken = default)
     {
         ThrowIfDisposed();
-        if (!TryGetSlot(exclusiveUse, allowPipelining: false, slot: null, out var index, out var connectionSlot, cancellationToken))
+        if (!TryGetSlot(exclusiveUse, allowPipelining: true, slot: null, out var index, out var connectionSlot, cancellationToken))
             ThrowSourceExhausted();
 
         return connectionSlot is not null ? new(connectionSlot) : OpenConnection(index, exclusiveUse, async: true, slot: null, connectionTimeout, cancellationToken);

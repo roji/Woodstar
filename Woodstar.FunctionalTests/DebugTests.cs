@@ -88,6 +88,45 @@ public class DebugTests
     }
 
     [Fact]
+    public async Task Pipelining()
+    {
+        const int NumStatements = 10;
+
+        var connection = await _databaseService.OpenConnectionAsync();
+
+        var protocol = await TdsProtocol.StartAsync(connection.Writer, connection.Stream, new SqlServerOptions
+        {
+            EndPoint = IPEndPoint.Parse(DatabaseService.EndPoint),
+            Username = DatabaseService.Username,
+            Password = DatabaseService.Password,
+            Database = DatabaseService.Database
+        }, null);
+
+        var commandWriter = new TdsCommandWriter(new SqlServerDatabaseInfo(), Encoding.Unicode);
+
+        var commandContexts = Enumerable.Range(0, 3)
+            .Select(_ =>
+            {
+                if (!protocol.TryStartOperation(out var slot, OperationBehavior.None, CancellationToken.None))
+                    throw new InvalidOperationException();
+                return commandWriter.WriteAsync(slot, new LowLevelSqlCommand("SELECT 1"));
+            });
+
+        foreach (var commandContext in commandContexts)
+        {
+            var op = await commandContext.GetOperation();
+            var reader = ((TdsProtocol)op.Protocol).Reader;
+            await reader.ReadAndExpectAsync<EnvChangeToken>();
+            var metadata = await reader.ReadAndExpectAsync<ColumnMetadataToken>();
+            var resultSetReader = await reader.GetResultSetReaderAsync(metadata.ColumnData);
+            var value = await resultSetReader.GetAsync<int>();
+            Assert.Equal(1, value);
+            Assert.False(await resultSetReader.MoveToNextRow());
+            op.Complete();
+        }
+    }
+
+    [Fact]
     public async Task Multiplexing()
     {
         var dataSource = new WoodstarDataSource(new WoodstarDataSourceOptions
@@ -98,8 +137,8 @@ public class DebugTests
             Database = DatabaseService.Database
         }, new TdsProtocolOptions());
 
-        var cmd = new LowLevelSqlCommand();
-        var readerTasks = new Task[1000];
+        var cmd = new LowLevelSqlCommand("SELECT 1");
+        var readerTasks = new Task[5];
         for (var i = 0; i < readerTasks.Length; i++)
         {
             readerTasks[i] = Execute(dataSource);
@@ -122,7 +161,6 @@ public class DebugTests
             var value = await resultSetReader.GetAsync<int>();
             // var value2 = await resultSetReader.GetAsync<int>();
             await resultSetReader.MoveToNextRow();
-            await reader.ReadAndExpectAsync<DoneToken>();
             op.Complete();
         }
     }
@@ -130,7 +168,7 @@ public class DebugTests
     [Fact]
     public async Task SqlClient()
     {
-        const string ConnectionString = $"Server=127.0.0.1;User ID={DatabaseService.Username};Password={DatabaseService.Password};Initial Catalog={DatabaseService.Database};Integrated Security=False;TrustServerCertificate=true;";
+        const string ConnectionString = $"Server=127.0.0.1;User ID={DatabaseService.Username};Password={DatabaseService.Password};Initial Catalog={DatabaseService.Database};Integrated Security=False;TrustServerCertificate=true;Encrypt=false";
 
         var builder = new SqlConnectionStringBuilder(ConnectionString);
         builder.Encrypt = false;
@@ -138,16 +176,6 @@ public class DebugTests
         await using var conn = new SqlConnection(builder.ToString());
         await conn.OpenAsync();
         var command = $"SELECT value FROM GENERATE_SERIES(1, {10});";
-        //
-        // //Warmup
-        // for (int i = 0; i < 1000; i++)
-        // {
-        // using var cmd = new LowLevelSqlCommand(command, conn);
-        // await using var reader = await cmd.ExecuteReaderAsync();
-        //     while (await reader.ReadAsync())
-        //     {
-        //     }
-        // }
     }
 
     struct LowLevelSqlCommand : ISqlCommand

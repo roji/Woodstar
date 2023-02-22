@@ -18,7 +18,7 @@ readonly struct SqlBatchMessage: IFrontendMessage
         _commandText = commandText;
     }
 
-    public static TdsPacketHeader MessageType => TdsPacketHeader.CreateType(TdsPacketType.SQLBatch, MessageStatus.ResetConnection);
+    public static TdsPacketHeader MessageType => TdsPacketHeader.CreateType(TdsPacketType.SqlBatch, MessageStatus.ResetConnection);
 
     public void Write<TWriter>(StreamingWriter<TWriter> writer) where TWriter : IStreamingWriter<byte>
     {

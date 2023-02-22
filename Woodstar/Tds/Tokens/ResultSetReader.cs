@@ -36,14 +36,24 @@ class ResultSetReader
         _reader.Commit();
         _reader = BufferReader.Empty;
 
-        var token = await _tokenReader.ReadAsync(cancellationToken);
-
-        return token switch
+        while (true)
         {
-            RowToken => true,
-            DoneToken => false,
-            _ => throw new ArgumentOutOfRangeException()
-        };
+            var token = await _tokenReader.ReadAsync(cancellationToken);
+
+            switch (token)
+            {
+                case RowToken:
+                    return true;
+                case DoneToken:
+                case DoneProcToken:
+                    return false;
+                case DoneInProcToken:
+                case ReturnStatusToken:
+                    continue;
+                default:
+                    throw new ArgumentOutOfRangeException("Unexpected token: " + token.GetType().Name);
+            }
+        }
     }
 
     internal async ValueTask<T> GetAsync<T>(int? column = null, CancellationToken cancellationToken = default)

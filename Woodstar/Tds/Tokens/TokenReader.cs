@@ -67,7 +67,6 @@ class TokenReader
                 var version = new Version(versionBytes[0], versionBytes[1], (versionBytes[2] << 8) | versionBytes[3]);
 
                 result = new LoginAckToken(@interface, tdsVersion, programName!, version);
-                reader.Commit();
                 break;
             }
             case TokenType.ERROR:
@@ -94,7 +93,6 @@ class TokenReader
                     ? new InfoToken(number, state, @class, msgText!, serverName!, procName!, lineNumber)
                     : new ErrorToken(number, state, @class, msgText!, serverName!, procName!, lineNumber);
 
-                reader.Commit();
                 break;
             }
             case TokenType.ENVCHANGE:
@@ -126,10 +124,11 @@ class TokenReader
                         throw new ArgumentOutOfRangeException();
                 }
 
-                reader.Commit();
                 break;
             }
             case TokenType.DONE:
+            case TokenType.DONEINPROC:
+            case TokenType.DONEPROC:
             {
                 const int doneLength = sizeof(ushort) + sizeof(ushort) + sizeof(ulong);
                 if (reader.Remaining < doneLength)
@@ -142,8 +141,14 @@ class TokenReader
 
                 reader.TryReadLittleEndian(out ushort curCmd);
                 reader.TryReadLittleEndian(out ulong doneRowCount);
-                result = new DoneToken(status, curCmd, doneRowCount);
-                reader.Commit();
+                result = tokenType switch
+                {
+                    TokenType.DONE => new DoneToken(status, curCmd, doneRowCount),
+                    TokenType.DONEINPROC => new DoneInProcToken(status, curCmd, doneRowCount),
+                    TokenType.DONEPROC => new DoneProcToken(status, curCmd, doneRowCount),
+                    _ => throw new UnreachableException()
+                };
+
                 break;
             }
             case TokenType.COLMETADATA:
@@ -176,6 +181,7 @@ class TokenReader
                     if (BackendMessage.DebugEnabled && !Enum.IsDefined(flags))
                         throw new ArgumentOutOfRangeException();
 
+                    // TYPE_INFO
                     reader.TryRead(out var typeByte);
                     var typeCode = (DataTypeCode)typeByte;
                     if (BackendMessage.DebugEnabled && !Enum.IsDefined(typeCode))
@@ -320,37 +326,38 @@ class TokenReader
                     columns.Add(new ColumnData(userType, flags, type, columnName!));
                 }
 
-                reader.Commit();
                 result = new ColumnMetadataToken(columns);
                 break;
             }
 
             case TokenType.ROW:
                 result = new RowToken();
-                reader.Commit();
+                break;
+
+            case TokenType.RETURNSTATUS:
+                reader.TryReadLittleEndian(out int returnValue);
+                result = new ReturnStatusToken(returnValue);
                 break;
 
             case TokenType.TVP_ROW:
-            case TokenType.RETURNSTATUS:
             case TokenType.ALTMETADATA:
+            case TokenType.RETURNVALUE:
             case TokenType.DATACLASSIFICATION:
             case TokenType.TABNAME:
             case TokenType.COLINFO:
             case TokenType.ORDER:
 
-            case TokenType.RETURNVALUE:
             case TokenType.FEATUREEXTACK:
             case TokenType.NBCROW:
             case TokenType.ALTROW:
             case TokenType.SESSIONSTATE:
             case TokenType.SSPI:
             case TokenType.FEDAUTHINFO:
-            case TokenType.DONEPROC:
-            case TokenType.DONEINPROC:
             default:
                 throw new ArgumentOutOfRangeException($"Unknown token type: {tokenType}");
         }
 
+        reader.Commit();
         return result;
     }
 
