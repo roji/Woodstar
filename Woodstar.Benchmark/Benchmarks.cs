@@ -30,8 +30,8 @@ public class Benchmarks
 
     const string EndPoint = "127.0.0.1:1433";
     const string Username = "sa";
-    const string Password = "Password1234";
-    const string Database = "msdb";
+    const string Password = "Abcd5678";
+    const string Database = "test";
 
     const string ConnectionString = $"Data Source=127.0.0.1;User ID={Username};Password={Password};Initial Catalog={Database};Integrated Security=False;TrustServerCertificate=true;";
     // static WoodstarDataSourceOptions Options { get; } = new()
@@ -145,7 +145,7 @@ public class Benchmarks
 
     }
 
-    // [Benchmark]/**/
+    [Benchmark]
     public async ValueTask Woodstar()
     {
         var cmd = new LowLevelSqlCommand();
@@ -161,7 +161,6 @@ public class Benchmarks
         var value = await resultSetReader.GetAsync<int>();
         // var value2 = await resultSetReader.GetAsync<int>();
         await resultSetReader.MoveToNextRow();
-        await reader.ReadAndExpectAsync<DoneToken>();
         op.Complete();
         //
         //
@@ -182,7 +181,7 @@ public class Benchmarks
 
     }
 
-    [Benchmark]
+    // [Benchmark]
     public async ValueTask WoodstarMultiplexing()
     {
         var cmd = new LowLevelSqlCommand();

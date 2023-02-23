@@ -91,7 +91,7 @@ class TokenReader
 
                 result = tokenType is TokenType.INFO
                     ? new InfoToken(number, state, @class, msgText!, serverName!, procName!, lineNumber)
-                    : new ErrorToken(number, state, @class, msgText!, serverName!, procName!, lineNumber);
+                    : throw new Exception(msgText);
 
                 break;
             }
